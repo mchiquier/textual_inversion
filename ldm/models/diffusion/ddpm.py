@@ -349,7 +349,12 @@ class DDPM(pl.LightningModule):
         return loss, loss_dict
 
     def training_step(self, batch, batch_idx):
+        opt = self.optimizers()
+        opt.zero_grad()
         loss, loss_dict = self.shared_step(batch)
+       #print(self.optimizers().param_groups[0]['params'][0])
+        self.manual_backward(loss)
+        opt.step()
 
         self.log_dict(loss_dict, prog_bar=True,
                       logger=True, on_step=True, on_epoch=True)
@@ -365,6 +370,7 @@ class DDPM(pl.LightningModule):
 
     @torch.no_grad()
     def validation_step(self, batch, batch_idx):
+        
         _, loss_dict_no_ema = self.shared_step(batch)
         with self.ema_scope():
             _, loss_dict_ema = self.shared_step(batch)
@@ -475,6 +481,7 @@ class LatentDiffusion(DDPM):
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
         self.bbox_tokenizer = None  
+        self.automatic_optimization = False
 
         self.restarted_from_ckpt = False
         if ckpt_path is not None:

@@ -338,8 +338,8 @@ class FrozenCLIPTextEmbedder(nn.Module):
 
     def freeze(self):
         self.model = self.model.eval()
-        for param in self.parameters():
-            param.requires_grad = False
+        #for param in self.parameters():
+        #    param.requires_grad = False
 
     def forward(self, text):
         tokens = clip.tokenize(text).to(self.device)

@@ -233,6 +233,14 @@ class DDPM(pl.LightningModule):
         if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
 
+    def on_save_checkpoint(self, checkpoint):
+
+        return 
+        #if os.path.isdir(self.trainer.checkpoint_callback.dirpath):
+        #    self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
+        #
+        #    self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
+
     def q_mean_variance(self, x_start, t):
         """
         Get the distribution q(x_t | x_0).
@@ -375,7 +383,7 @@ class DDPM(pl.LightningModule):
         opt = self.optimizers()
         opt.zero_grad()
         loss, loss_dict = self.shared_step(batch)
-       #print(self.optimizers().param_groups[0]['params'][0])
+        self.optimizers().param_groups[0]['params'][0].retain_grad()
         self.manual_backward(loss)
         opt.step()
 
@@ -500,14 +508,12 @@ class LatentDiffusion(DDPM):
         self.instantiate_first_stage(first_stage_config)
 
         self.instantiate_cond_stage(cond_stage_config)
-        self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+        #self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
 
-        for param in self.embedding_manager.embedding_parameters():
-            param.requires_grad = True
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
         self.bbox_tokenizer = None
-        self.parametersdiff = torch.nn.Parameter(torch.zeros((1,77,768)).to(self.device))
+        self.parametersdiff = torch.nn.Parameter(torch.zeros((4,77,768)).to(self.device))
         self.automatic_optimization = False
         #self.parametersdiff.requires_grad_() 
 
@@ -557,7 +563,7 @@ class LatentDiffusion(DDPM):
         self.first_stage_model = model.eval()
         self.first_stage_model.train = disabled_train
         for param in self.first_stage_model.parameters():
-            param.requires_grad = False
+            param.requires_grad = True
 
     def instantiate_cond_stage(self, config):
         if not self.cond_stage_trainable:
@@ -576,7 +582,7 @@ class LatentDiffusion(DDPM):
                 self.cond_stage_model.train = disabled_train
 
                 for param in self.cond_stage_model.parameters():
-                    param.requires_grad = False
+                    param.requires_grad = True
                 #self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
 
         else:
@@ -585,13 +591,13 @@ class LatentDiffusion(DDPM):
             model = instantiate_from_config(config)
             self.cond_stage_model = model
 
-    """def instantiate_embedding_manager(self, config, embedder):
+    def instantiate_embedding_manager(self, config, embedder):
         model = instantiate_from_config(config, embedder=embedder)
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             model.load(config.params.embedding_manager_ckpt)
         
-        return model"""
+        return model
 
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
@@ -605,14 +611,6 @@ class LatentDiffusion(DDPM):
         denoise_grid = make_grid(denoise_grid, nrow=n_imgs_per_row)
         return denoise_grid
 
-    @rank_zero_only
-    def on_save_checkpoint(self, checkpoint):
-        
-        if os.path.isdir(self.trainer.checkpoint_callback.dirpath):
-            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
-
-            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
-
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
             z = encoder_posterior.sample()
@@ -625,7 +623,7 @@ class LatentDiffusion(DDPM):
     def get_learned_conditioning(self, c):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
+                c = self.cond_stage_model.encode(c)
                 #pdb.set_trace()
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
@@ -725,7 +723,7 @@ class LatentDiffusion(DDPM):
 
         return fold, unfold, normalization, weighting
 
-    
+    @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
                   cond_key=None, return_original_cond=False, bs=None, uncond=0.05):
         x = super().get_input(batch, 'edited')
@@ -735,18 +733,18 @@ class LatentDiffusion(DDPM):
         y = super().get_input(batch, 'image')
         encoder_posterior_y = self.encode_first_stage(y)
         encoder_posterior_x = self.encode_first_stage(x)
-        zx = self.get_first_stage_encoding(encoder_posterior_x).detach()
+        zx = self.get_first_stage_encoding(encoder_posterior_x).detach() #encoder_posterior_x.mode() #.detach() #
         cond_key = cond_key or self.cond_stage_key
         #pdb.set_trace()
-        c = self.get_learned_conditioning(batch[cond_key])
-        xc = {}
+        #c = self.get_learned_conditioning(batch[cond_key])
         #xc = super().get_input(batch, cond_key)
-        xc["c_crossattn"] = c[:bs]
+        xc={}
+        #xc["c_crossattn"] = c[:bs]
         #if not self.initialized:
         #    self.parametersdiff[:] = xc["c_crossattn"][:1,:,:]
         #    self.initialized = True
         #else:
-        #xc["c_crossattn"] = self.parametersdiff.repeat(4,1,1)
+        xc["c_crossattn"] = self.parametersdiff
         
         xc["c_concat"] = y[:bs]
         cond = {}
@@ -757,7 +755,7 @@ class LatentDiffusion(DDPM):
         input_mask = 1 - rearrange((random >= uncond).float() * (random < 3 * uncond).float(), "n -> n 1 1 1")
 
         null_prompt = self.get_learned_conditioning([""])
-        cond["c_crossattn"] = xc["c_crossattn"]#[torch.where(prompt_mask, null_prompt, xc["c_crossattn"])] #.detach()
+        cond["c_crossattn"] = [torch.where(prompt_mask, null_prompt, xc["c_crossattn"])]
         cond["c_concat"] = [input_mask * encoder_posterior_y.mode()] #.detach()
 
         out = [zx, cond]
@@ -954,14 +952,6 @@ class LatentDiffusion(DDPM):
 
         return [rescale_bbox(b) for b in bboxes]
 
-    def instantiate_embedding_manager(self, config, embedder):
-        model = instantiate_from_config(config, embedder=embedder)
-
-        if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
-            model.load(config.params.embedding_manager_ckpt)
-        
-        return model
-
     def apply_model(self, x_noisy, t, cond, return_ids=False):
 
         if isinstance(cond, dict):
@@ -1087,6 +1077,7 @@ class LatentDiffusion(DDPM):
         noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
         model_output = self.apply_model(x_noisy, t, cond)
+        self.model_output_retain = model_output
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1447,7 +1438,7 @@ class LatentDiffusion(DDPM):
     def configure_optimizers(self):
         lr = self.learning_rate
         if True: #if self.embedding_manager is not None: # If using textual inversion
-            embedding_params = list(self.embedding_manager.embedding_parameters())#[self.parametersdiff]
+            embedding_params = [self.parametersdiff]#list(self.embedding_manager.embedding_parameters())
             opt = torch.optim.AdamW(embedding_params, lr=lr)
             """embedding_params = list(self.embedding_manager.embedding_parameters())
 
@@ -1507,7 +1498,7 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(x, t, context=cc)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
-            cc = c_crossattn #torch.cat(c_crossattn, 1)
+            cc = torch.cat(c_crossattn, 1)
             out = self.diffusion_model(xc, t, context=cc)
         elif self.conditioning_key == 'adm':
             cc = c_crossattn[0]

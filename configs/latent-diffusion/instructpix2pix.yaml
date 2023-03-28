@@ -2,7 +2,7 @@
 # See more details in LICENSE.
 
 model:
-  base_learning_rate: 1.0e-04
+  base_learning_rate: 5.0e-06
   target: ldm.models.diffusion.ddpm_edit.LatentDiffusion
   params:
     ckpt_path: models/ldm/stable-diffusion-v1/instruct-pix2pix-00-22000.ckpt
