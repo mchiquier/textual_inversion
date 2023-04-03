@@ -4,7 +4,7 @@ import math
 import random
 import sys
 from argparse import ArgumentParser
-import pdb
+
 import einops
 import k_diffusion as K
 import numpy as np
@@ -14,7 +14,6 @@ from einops import rearrange
 from omegaconf import OmegaConf
 from PIL import Image, ImageOps
 from torch import autocast
-from ldm.models.diffusion.ddim import DDIMSampler
 
 sys.path.append("./stable_diffusion")
 
@@ -60,6 +59,7 @@ def load_model_from_config(config, ckpt, vae_ckpt=None, verbose=False):
         print(u)
     return model
 
+
 def main():
     parser = ArgumentParser()
     parser.add_argument("--resolution", default=512, type=int)
@@ -87,8 +87,8 @@ def main():
     width, height = input_image.size
     factor = args.resolution / max(width, height)
     factor = math.ceil(min(width, height) * factor / 64) * 64 / min(width, height)
-    width = int((width * factor) // 64) * 32
-    height = int((height * factor) // 64) * 32
+    width = int((width * factor) // 64) * 64
+    height = int((height * factor) // 64) * 64
     input_image = ImageOps.fit(input_image, (width, height), method=Image.Resampling.LANCZOS)
 
     if args.edit == "":
@@ -116,15 +116,12 @@ def main():
         }
         torch.manual_seed(seed)
         z = torch.randn_like(cond["c_concat"][0]) * sigmas[0]
-        pdb.set_trace()
-        #z, z_denoise_row = model.sample_log(cond=cond,batch_size=1,ddim=False,ddim_steps=200,eta=1.0)
-        #DIFFERENT KIND OF SAMPLING 
         z = K.sampling.sample_euler_ancestral(model_wrap_cfg, z, sigmas, extra_args=extra_args)
         x = model.decode_first_stage(z)
         x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
         x = 255.0 * rearrange(x, "1 c h w -> h w c")
         edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
-    edited_image.save(args.output)
+    edited_image.save(args.output + "purple4.png")
 
 
 if __name__ == "__main__":
