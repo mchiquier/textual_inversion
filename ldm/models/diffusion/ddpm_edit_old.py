@@ -233,14 +233,6 @@ class DDPM(pl.LightningModule):
         if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
 
-    def on_save_checkpoint(self, checkpoint):
-
-        return 
-        #if os.path.isdir(self.trainer.checkpoint_callback.dirpath):
-        #    self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
-        #
-        #    self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
-
     def q_mean_variance(self, x_start, t):
         """
         Get the distribution q(x_t | x_0).
@@ -383,7 +375,7 @@ class DDPM(pl.LightningModule):
         opt = self.optimizers()
         opt.zero_grad()
         loss, loss_dict = self.shared_step(batch)
-        self.optimizers().param_groups[0]['params'][0].retain_grad()
+       #print(self.optimizers().param_groups[0]['params'][0])
         self.manual_backward(loss)
         opt.step()
 
@@ -508,12 +500,14 @@ class LatentDiffusion(DDPM):
         self.instantiate_first_stage(first_stage_config)
 
         self.instantiate_cond_stage(cond_stage_config)
-        #self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
+        self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
 
+        for param in self.embedding_manager.embedding_parameters():
+            param.requires_grad = True
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
         self.bbox_tokenizer = None
-        self.parametersdiff = torch.nn.Parameter(torch.zeros((4,77,768)).to(self.device))
+        self.parametersdiff = torch.nn.Parameter(torch.zeros((1,77,768)).to(self.device))
         self.automatic_optimization = False
         #self.parametersdiff.requires_grad_() 
 
@@ -563,7 +557,7 @@ class LatentDiffusion(DDPM):
         self.first_stage_model = model.eval()
         self.first_stage_model.train = disabled_train
         for param in self.first_stage_model.parameters():
-            param.requires_grad = True
+            param.requires_grad = False
 
     def instantiate_cond_stage(self, config):
         if not self.cond_stage_trainable:
@@ -582,7 +576,7 @@ class LatentDiffusion(DDPM):
                 self.cond_stage_model.train = disabled_train
 
                 for param in self.cond_stage_model.parameters():
-                    param.requires_grad = True
+                    param.requires_grad = False
                 #self.embedding_manager = self.instantiate_embedding_manager(personalization_config, self.cond_stage_model)
 
         else:
@@ -591,13 +585,13 @@ class LatentDiffusion(DDPM):
             model = instantiate_from_config(config)
             self.cond_stage_model = model
 
-    def instantiate_embedding_manager(self, config, embedder):
+    """def instantiate_embedding_manager(self, config, embedder):
         model = instantiate_from_config(config, embedder=embedder)
 
         if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
             model.load(config.params.embedding_manager_ckpt)
         
-        return model
+        return model"""
 
     def _get_denoise_row_from_list(self, samples, desc='', force_no_decoder_quantization=False):
         denoise_row = []
@@ -611,6 +605,14 @@ class LatentDiffusion(DDPM):
         denoise_grid = make_grid(denoise_grid, nrow=n_imgs_per_row)
         return denoise_grid
 
+    @rank_zero_only
+    def on_save_checkpoint(self, checkpoint):
+        
+        if os.path.isdir(self.trainer.checkpoint_callback.dirpath):
+            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, "embeddings.pt"))
+
+            self.embedding_manager.save(os.path.join(self.trainer.checkpoint_callback.dirpath, f"embeddings_gs-{self.global_step}.pt"))
+
     def get_first_stage_encoding(self, encoder_posterior):
         if isinstance(encoder_posterior, DiagonalGaussianDistribution):
             z = encoder_posterior.sample()
@@ -623,7 +625,7 @@ class LatentDiffusion(DDPM):
     def get_learned_conditioning(self, c):
         if self.cond_stage_forward is None:
             if hasattr(self.cond_stage_model, 'encode') and callable(self.cond_stage_model.encode):
-                c = self.cond_stage_model.encode(c)
+                c = self.cond_stage_model.encode(c, embedding_manager=self.embedding_manager)
                 #pdb.set_trace()
                 if isinstance(c, DiagonalGaussianDistribution):
                     c = c.mode()
@@ -723,7 +725,7 @@ class LatentDiffusion(DDPM):
 
         return fold, unfold, normalization, weighting
 
-    @torch.no_grad()
+    
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
                   cond_key=None, return_original_cond=False, bs=None, uncond=0.05):
         x = super().get_input(batch, 'edited')
@@ -731,20 +733,21 @@ class LatentDiffusion(DDPM):
             x = x[:bs]
         x = x.to(self.device)
         y = super().get_input(batch, 'image')
+        #pdb.set_trace()
         encoder_posterior_y = self.encode_first_stage(y)
         encoder_posterior_x = self.encode_first_stage(x)
-        zx = self.get_first_stage_encoding(encoder_posterior_x).detach() #encoder_posterior_x.mode() #.detach() #
+        zx = self.get_first_stage_encoding(encoder_posterior_x).detach()
         cond_key = cond_key or self.cond_stage_key
         #pdb.set_trace()
-        #c = self.get_learned_conditioning(batch[cond_key])
+        c = self.get_learned_conditioning(batch[cond_key])
+        xc = {}
         #xc = super().get_input(batch, cond_key)
-        xc={}
-        #xc["c_crossattn"] = c[:bs]
+        xc["c_crossattn"] = c[:bs]
         #if not self.initialized:
         #    self.parametersdiff[:] = xc["c_crossattn"][:1,:,:]
         #    self.initialized = True
         #else:
-        xc["c_crossattn"] = self.parametersdiff
+        #xc["c_crossattn"] = self.parametersdiff.repeat(4,1,1)
         
         xc["c_concat"] = y[:bs]
         cond = {}
@@ -755,8 +758,9 @@ class LatentDiffusion(DDPM):
         input_mask = 1 - rearrange((random >= uncond).float() * (random < 3 * uncond).float(), "n -> n 1 1 1")
 
         null_prompt = self.get_learned_conditioning([""])
-        cond["c_crossattn"] = [torch.where(prompt_mask, null_prompt, xc["c_crossattn"])]
-        cond["c_concat"] = [input_mask * encoder_posterior_y.mode()] #.detach()
+        cond["c_crossattn"] = xc["c_crossattn"]#[torch.where(prompt_mask, null_prompt, xc["c_crossattn"])] #.detach()
+        cond["c_concat"] = [input_mask * encoder_posterior_y.mode()]#[encoder_posterior_y.mode()] 
+        #pdb.set_trace()#.detach()[input_mask * encoder_posterior_y.mode()]
 
         out = [zx, cond]
         if return_first_stage_outputs:
@@ -931,8 +935,10 @@ class LatentDiffusion(DDPM):
         loss = self(x, c)
         return loss
 
-    def forward(self, x, c, *args, **kwargs):
-        t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+    def forward(self, x, c, t,*args, **kwargs):
+        t = t.to(self.device).long()
+        #t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
@@ -951,6 +957,14 @@ class LatentDiffusion(DDPM):
             return x0, y0, w, h
 
         return [rescale_bbox(b) for b in bboxes]
+
+    def instantiate_embedding_manager(self, config, embedder):
+        model = instantiate_from_config(config, embedder=embedder)
+
+        if config.params.get("embedding_manager_ckpt", None): # do not load if missing OR empty string
+            model.load(config.params.embedding_manager_ckpt)
+        
+        return model
 
     def apply_model(self, x_noisy, t, cond, return_ids=False):
 
@@ -1074,10 +1088,10 @@ class LatentDiffusion(DDPM):
         return mean_flat(kl_prior) / np.log(2.0)
 
     def p_losses(self, x_start, cond, t, noise=None):
-        noise = default(noise, lambda: torch.randn_like(x_start))
+        #noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        #pdb.set_trace()
         model_output = self.apply_model(x_noisy, t, cond)
-        self.model_output_retain = model_output
 
         loss_dict = {}
         prefix = 'train' if self.training else 'val'
@@ -1317,7 +1331,7 @@ class LatentDiffusion(DDPM):
                    quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
                    plot_diffusion_rows=False, **kwargs):
 
-        use_ddim = False
+        use_ddim = True
 
         log = dict()
         z, c, x, xrec, xc = self.get_input(batch, self.first_stage_key,
@@ -1367,14 +1381,14 @@ class LatentDiffusion(DDPM):
         if sample:
             # get denoise row
             with self.ema_scope("Plotting"):
-                samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                         ddim_steps=ddim_steps,eta=ddim_eta)
+                #pdb.set_trace()
+                samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,ddim_steps=ddim_steps,eta=ddim_eta)
                 # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True)
             x_samples = self.decode_first_stage(samples)
             log["samples"] = x_samples
-            if plot_denoise_rows:
-                denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
-                log["denoise_row"] = denoise_grid
+            #if True: #plot_denoise_rows:
+            #    denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
+            #                log["denoise_row"] = denoise_grid
 
             uc = self.get_learned_conditioning(len(c) * [""])
             sample_scaled, _ = self.sample_log(cond=c, 
@@ -1382,7 +1396,7 @@ class LatentDiffusion(DDPM):
                                                ddim=use_ddim, 
                                                ddim_steps=ddim_steps,
                                                eta=ddim_eta,                                                 
-                                               unconditional_guidance_scale=5.0,
+                                               unconditional_guidance_scale=10.0,
                                                unconditional_conditioning=uc)
             log["samples_scaled"] = self.decode_first_stage(sample_scaled)
 
@@ -1420,7 +1434,7 @@ class LatentDiffusion(DDPM):
                 x_samples = self.decode_first_stage(samples.to(self.device))
                 log["samples_outpainting"] = x_samples
 
-        if plot_progressive_rows:
+        if True: #plot_progressive_rows:
             with self.ema_scope("Plotting Progressives"):
                 img, progressives = self.progressive_denoising(c,
                                                                shape=(self.channels, self.image_size, self.image_size),
@@ -1438,7 +1452,7 @@ class LatentDiffusion(DDPM):
     def configure_optimizers(self):
         lr = self.learning_rate
         if True: #if self.embedding_manager is not None: # If using textual inversion
-            embedding_params = [self.parametersdiff]#list(self.embedding_manager.embedding_parameters())
+            embedding_params = list(self.embedding_manager.embedding_parameters())#[self.parametersdiff]
             opt = torch.optim.AdamW(embedding_params, lr=lr)
             """embedding_params = list(self.embedding_manager.embedding_parameters())
 
@@ -1498,7 +1512,7 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(x, t, context=cc)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
-            cc = torch.cat(c_crossattn, 1)
+            cc = c_crossattn #torch.cat(c_crossattn, 1)
             out = self.diffusion_model(xc, t, context=cc)
         elif self.conditioning_key == 'adm':
             cc = c_crossattn[0]

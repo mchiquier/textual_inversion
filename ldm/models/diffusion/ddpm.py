@@ -392,6 +392,7 @@ class DDPM(pl.LightningModule):
     @torch.no_grad()
     def log_images(self, batch, N=8, n_row=2, sample=True, return_keys=None, **kwargs):
         log = dict()
+        #pdb.set_trace()
         x = self.get_input(batch, self.first_stage_key)
         N = min(x.shape[0], N)
         n_row = min(x.shape[0], n_row)
@@ -700,6 +701,7 @@ class LatentDiffusion(DDPM):
     @torch.no_grad()
     def get_input(self, batch, k, return_first_stage_outputs=False, force_c_encode=False,
                   cond_key=None, return_original_cond=False, bs=None):
+        #pdb.set_trace()
         x = super().get_input(batch, k)
         if bs is not None:
             x = x[:bs]
@@ -1290,7 +1292,7 @@ class LatentDiffusion(DDPM):
 
     @torch.no_grad()
     def sample_log(self,cond,batch_size,ddim, ddim_steps,**kwargs):
-
+        #pdb.set_trace()
         if ddim:
             ddim_sampler = DDIMSampler(self)
             shape = (self.channels, self.image_size, self.image_size)
@@ -1317,7 +1319,7 @@ class LatentDiffusion(DDPM):
                                            return_original_cond=True,
                                            bs=N)
         
-        pdb.set_trace()
+        #pdb.set_trace()
         N = min(x.shape[0], N)
         n_row = min(x.shape[0], n_row)
         log["inputs"] = x
@@ -1368,6 +1370,7 @@ class LatentDiffusion(DDPM):
                 log["denoise_row"] = denoise_grid
             
             uc = self.get_learned_conditioning(len(c) * [""])
+            #pdb.set_trace()
             sample_scaled, _ = self.sample_log(cond=c, 
                                                batch_size=N, 
                                                ddim=use_ddim, 
@@ -1513,6 +1516,7 @@ class DiffusionWrapper(pl.LightningModule):
         assert self.conditioning_key in [None, 'concat', 'crossattn', 'hybrid', 'adm']
 
     def forward(self, x, t, c_concat: list = None, c_crossattn: list = None):
+        #pdb.set_trace()
         if self.conditioning_key is None:
             out = self.diffusion_model(x, t)
         elif self.conditioning_key == 'concat':

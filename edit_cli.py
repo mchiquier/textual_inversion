@@ -10,6 +10,7 @@ import k_diffusion as K
 import numpy as np
 import torch
 import torch.nn as nn
+import pdb
 from einops import rearrange
 from omegaconf import OmegaConf
 from PIL import Image, ImageOps
@@ -70,13 +71,14 @@ def main():
     parser.add_argument("--input", required=True, type=str)
     parser.add_argument("--output", required=True, type=str)
     parser.add_argument("--edit", required=True, type=str)
-    parser.add_argument("--cfg-text", default=7.5, type=float)
+    parser.add_argument("--cfg-text", default=2.0, type=float)
     parser.add_argument("--cfg-image", default=1.5, type=float)
     parser.add_argument("--seed", type=int)
     args = parser.parse_args()
 
     config = OmegaConf.load(args.config)
     model = load_model_from_config(config, args.ckpt, args.vae_ckpt)
+
     model.eval().cuda()
     model_wrap = K.external.CompVisDenoiser(model)
     model_wrap_cfg = CFGDenoiser(model_wrap)
@@ -121,7 +123,7 @@ def main():
         x = torch.clamp((x + 1.0) / 2.0, min=0.0, max=1.0)
         x = 255.0 * rearrange(x, "1 c h w -> h w c")
         edited_image = Image.fromarray(x.type(torch.uint8).cpu().numpy())
-    edited_image.save(args.output + "purple4.png")
+    edited_image.save(args.output + "purplenothing.png")
 
 
 if __name__ == "__main__":

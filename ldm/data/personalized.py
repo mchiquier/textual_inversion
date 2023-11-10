@@ -4,7 +4,7 @@ import PIL
 from PIL import Image
 from torch.utils.data import Dataset
 from torchvision import transforms
-
+import pdb
 import random
 
 imagenet_templates_smallest = [
@@ -128,10 +128,12 @@ imagenet_dual_templates_small = [
 per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
+#per_img_token_list = ['b','c','d','e','f','g','h','i','j']
 
 class PersonalizedBase(Dataset):
     def __init__(self,
                  data_root,
+                 edit_root,
                  size=None,
                  repeats=100,
                  interpolation="bicubic",
@@ -147,7 +149,7 @@ class PersonalizedBase(Dataset):
         self.data_root = data_root
 
         self.image_paths = [os.path.join(self.data_root, file_path) for file_path in os.listdir(self.data_root)]
-        self.image_paths_edited = [os.path.join(self.data_root.split("/")[0] + "purple/", file_path) for file_path in os.listdir(self.data_root)]
+        self.image_paths_edited = [os.path.join(self.data_root + edit_root + "/", file_path) for file_path in os.listdir(self.data_root)]
 
         # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
@@ -175,11 +177,13 @@ class PersonalizedBase(Dataset):
                               }[interpolation]
         self.flip = transforms.RandomHorizontalFlip(p=flip_p)
 
+
     def __len__(self):
         return self._length
 
     def __getitem__(self, i):
         example = {}
+
         image = Image.open(self.image_paths[i % self.num_images])
         image_edited = Image.open(self.image_paths_edited[i % self.num_images])
 

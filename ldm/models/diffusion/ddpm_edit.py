@@ -14,12 +14,14 @@ import torch.nn as nn
 import numpy as np
 import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
+import k_diffusion as K
 from einops import rearrange, repeat
 from contextlib import contextmanager
 from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
-from pytorch_lightning.utilities.distributed import rank_zero_only
+from pytorch_lightning.utilities.rank_zero import rank_zero_only
+
 import pdb
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -27,6 +29,22 @@ from ldm.modules.distributions.distributions import normal_kl, DiagonalGaussianD
 from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, AutoencoderKL
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
+import einops
+
+class CFGDenoiser(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.inner_model = model
+
+    def forward(self, z, sigma, cond, uncond, text_cfg_scale, image_cfg_scale):
+        cfg_z = einops.repeat(z, "1 ... -> n ...", n=3)
+        cfg_sigma = einops.repeat(sigma, "1 ... -> n ...", n=3)
+        cfg_cond = {
+            "c_crossattn": [torch.cat([cond["c_crossattn"][0], uncond["c_crossattn"][0], uncond["c_crossattn"][0]])],
+            "c_concat": [torch.cat([cond["c_concat"][0], cond["c_concat"][0], uncond["c_concat"][0]])],
+        }
+        out_cond, out_img_cond, out_uncond = self.inner_model(cfg_z, cfg_sigma, cond=cfg_cond).chunk(3)
+        return out_uncond + text_cfg_scale * (out_cond - out_img_cond) + image_cfg_scale * (out_img_cond - out_uncond)
 
 
 __conditioning_keys__ = {'concat': 'c_concat',
@@ -423,9 +441,9 @@ class DDPM(pl.LightningModule):
         # get diffusion row
         diffusion_row = list()
         x_start = x[:n_row]
-
+        
         for t in range(self.num_timesteps):
-            if t % self.log_every_t == 0 or t == self.num_timesteps - 1:
+            if t % self.log_every_t == 0 or t == self.num_timesteps - 1: 
                 t = repeat(torch.tensor([t]), '1 -> b', b=n_row)
                 t = t.to(self.device).long()
                 noise = torch.randn_like(x_start)
@@ -733,6 +751,7 @@ class LatentDiffusion(DDPM):
             x = x[:bs]
         x = x.to(self.device)
         y = super().get_input(batch, 'image')
+        #pdb.set_trace()
         encoder_posterior_y = self.encode_first_stage(y)
         encoder_posterior_x = self.encode_first_stage(x)
         zx = self.get_first_stage_encoding(encoder_posterior_x).detach()
@@ -757,8 +776,9 @@ class LatentDiffusion(DDPM):
         input_mask = 1 - rearrange((random >= uncond).float() * (random < 3 * uncond).float(), "n -> n 1 1 1")
 
         null_prompt = self.get_learned_conditioning([""])
-        cond["c_crossattn"] = xc["c_crossattn"]#[torch.where(prompt_mask, null_prompt, xc["c_crossattn"])] #.detach()
-        cond["c_concat"] = [input_mask * encoder_posterior_y.mode()] #.detach()
+        cond["c_crossattn"] = [xc["c_crossattn"]]#[torch.where(prompt_mask, null_prompt, xc["c_crossattn"])] #.detach()
+        cond["c_concat"] =  [input_mask * encoder_posterior_y.mode()] #[encoder_posterior_y.mode()] 
+        #pdb.set_trace()#.detach()[input_mask * encoder_posterior_y.mode()]
 
         out = [zx, cond]
         if return_first_stage_outputs:
@@ -936,6 +956,7 @@ class LatentDiffusion(DDPM):
     def forward(self, x, c, t,*args, **kwargs):
         t = t.to(self.device).long()
         #t = torch.randint(0, self.num_timesteps, (x.shape[0],), device=self.device).long()
+        
         if self.model.conditioning_key is not None:
             assert c is not None
             if self.cond_stage_trainable:
@@ -1087,6 +1108,7 @@ class LatentDiffusion(DDPM):
     def p_losses(self, x_start, cond, t, noise=None):
         #noise = default(noise, lambda: torch.randn_like(x_start))
         x_noisy = self.q_sample(x_start=x_start, t=t, noise=noise)
+        #pdb.set_trace()
         model_output = self.apply_model(x_noisy, t, cond)
 
         loss_dict = {}
@@ -1323,11 +1345,11 @@ class LatentDiffusion(DDPM):
 
 
     @torch.no_grad()
-    def log_images(self, batch, N=4, n_row=4, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
+    def log_images(self, txt_config, img_config, batch, N=16, n_row=16, sample=True, ddim_steps=200, ddim_eta=1., return_keys=None,
                    quantize_denoised=True, inpaint=False, plot_denoise_rows=False, plot_progressive_rows=False,
                    plot_diffusion_rows=False, **kwargs):
 
-        use_ddim = False
+        use_ddim = True
 
         log = dict()
         z, c, x, xrec, xc = self.get_input(batch, self.first_stage_key,
@@ -1376,25 +1398,53 @@ class LatentDiffusion(DDPM):
 
         if sample:
             # get denoise row
-            with self.ema_scope("Plotting"):
-                samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,
-                                                         ddim_steps=ddim_steps,eta=ddim_eta)
-                # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True)
-            x_samples = self.decode_first_stage(samples)
-            log["samples"] = x_samples
-            if plot_denoise_rows:
-                denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
-                log["denoise_row"] = denoise_grid
+            torch.manual_seed(0)
+            model_wrap = K.external.CompVisDenoiser(self)
+            model_wrap_cfg = CFGDenoiser(model_wrap)
+            null_token = self.get_learned_conditioning([""])
+            sigmas = model_wrap.get_sigmas(100)
+            uncond={}
+            list_of_x = []
+            for i in range(c['c_crossattn'][0].shape[0]):
+                cur={}
+                cur['c_crossattn'] = [torch.unsqueeze(c['c_crossattn'][0][i],dim=0)]
+                cur['c_concat'] = [torch.unsqueeze(c['c_concat'][0][i],dim=0)]
+                uncond["c_crossattn"] = [null_token]
+                uncond["c_concat"] = [torch.zeros_like(cur["c_concat"][0])]
+            
+                extra_args = {
+                "cond": cur,
+                "uncond": uncond,
+                "text_cfg_scale": txt_config, #7.68865, #7.5 for man statue, 7.684 for robot
+                "image_cfg_scale": img_config, #6.003, #4.95 for statue, 6.0 for robot
+                }
+                z = torch.randn_like(cur["c_concat"][0]) * sigmas[0]
+                z = K.sampling.sample_euler_ancestral(model_wrap_cfg, z, sigmas, extra_args=extra_args)
+                x = self.decode_first_stage(z)
+                list_of_x.append(x)
+                #with self.ema_scope("Plotting"):
+                    #pdb.set_trace()
+                #    samples, z_denoise_row = self.sample_log(cond=c,batch_size=N,ddim=use_ddim,ddim_steps=ddim_steps,eta=ddim_eta)
+                    # samples, z_denoise_row = self.sample(cond=c, batch_size=N, return_intermediates=True)
+                #x_samples = self.decode_first_stage(samples)
+            
+            log["txt_scale"] = extra_args['text_cfg_scale']
+            log["image_scale"]=extra_args['image_cfg_scale']
+            #pdb.set_trace()
+            log["samples"] = torch.cat(list_of_x,dim=0) #x_samples
+            #if True: #plot_denoise_rows:
+            #    denoise_grid = self._get_denoise_row_from_list(z_denoise_row)
+            #                log["denoise_row"] = denoise_grid
 
             uc = self.get_learned_conditioning(len(c) * [""])
-            sample_scaled, _ = self.sample_log(cond=c, 
+            """sample_scaled, _ = self.sample_log(cond=c, 
                                                batch_size=N, 
                                                ddim=use_ddim, 
                                                ddim_steps=ddim_steps,
                                                eta=ddim_eta,                                                 
-                                               unconditional_guidance_scale=5.0,
+                                               unconditional_guidance_scale=10.0,
                                                unconditional_conditioning=uc)
-            log["samples_scaled"] = self.decode_first_stage(sample_scaled)
+            log["samples_scaled"] = self.decode_first_stage(sample_scaled)"""
 
             if quantize_denoised and not isinstance(self.first_stage_model, AutoencoderKL) and not isinstance(
                     self.first_stage_model, IdentityFirstStage):
@@ -1430,7 +1480,7 @@ class LatentDiffusion(DDPM):
                 x_samples = self.decode_first_stage(samples.to(self.device))
                 log["samples_outpainting"] = x_samples
 
-        if plot_progressive_rows:
+        if False: #plot_progressive_rows:
             with self.ema_scope("Plotting Progressives"):
                 img, progressives = self.progressive_denoising(c,
                                                                shape=(self.channels, self.image_size, self.image_size),
@@ -1508,7 +1558,7 @@ class DiffusionWrapper(pl.LightningModule):
             out = self.diffusion_model(x, t, context=cc)
         elif self.conditioning_key == 'hybrid':
             xc = torch.cat([x] + c_concat, dim=1)
-            cc = c_crossattn #torch.cat(c_crossattn, 1)
+            cc = torch.cat(c_crossattn, 1)
             out = self.diffusion_model(xc, t, context=cc)
         elif self.conditioning_key == 'adm':
             cc = c_crossattn[0]
