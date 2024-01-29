@@ -61,16 +61,17 @@ wget -O models/ldm/stable-diffusion-v1/instruct-pix2pix-00-22000.ckpt http://ins
 To invert an image set, run:
 
 ```
-export DATA_ROOT=path/to/data
-export EDIT_ROOT=path/to/edit
-export EVAL_ROOT=path/to/eval
-export OUTPUT_PATH=path/to/output
+export DATA_ROOT="data/headshot"
+export EDIT_ROOT="data/headshothat"
+export EVAL_ROOT="data/headshoteval"
+export OUTPUT_PATH="results/trilbyhat"
 
-python train_inversion.py --data_root=$DATA_ROOT
-                          --edit_root=$EDIT_ROOT 
-                          --eval_root=$EVAL_ROOT
-                          --output_path=$OUTPUT_PATH
-                          --init_words word1 word2 word3
+python train_inversion.py --data_root=$DATA_ROOT \
+                          --edit_root=$EDIT_ROOT \
+                          --eval_root=$EVAL_ROOT \
+                          --output_path=$OUTPUT_PATH \
+                          --init_words "word1" "word2"
+
 ```
 
 where the initialization word should be a single-token rough description of the object (e.g., 'toy', 'painting', 'sculpture'). If the input is comprised of more than a single token, you will be prompted to replace it.
