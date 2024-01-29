@@ -57,11 +57,21 @@ def get_parser(**parser_kwargs):
         required=True, 
         help="Path to directory with edited images")
     
+    parser.add_argument("--eval_root", 
+        type=str, 
+        required=True, 
+        help="Path to directory with edited images")
+    
     parser.add_argument("--output_path", 
         type=str, 
         required=True, 
         help="Path to save the results")
-        
+    
+    parser.add_argument('--init_words', nargs='+', help='A list of strings')
+    
+    
+    return parser
+    
 if __name__ == "__main__":
     
     parser = get_parser()
@@ -73,7 +83,9 @@ if __name__ == "__main__":
     yml_paths = ['configs/latent-diffusion/instructpix2pix.yaml', ]
     data_root = opt.data_root
     edit_root = opt.edit_root
+    data_eval_root = opt.eval_root
     output_path = opt.output_path
+    init_words = opt.init_words
     if not os.path.isdir(output_path):
         os.mkdir(output_path)
     device=0
@@ -93,9 +105,11 @@ if __name__ == "__main__":
     '''
     create dataloader
     '''
-    data_root = 'data/headshot'
-    data_eval_root = 'data/headshoteval'
-    edit_root = 'data/headshothat'
+    # data_root = 'data/headshot'
+    # data_eval_root = 'data/headshoteval'
+    # edit_root = 'data/headshothat'
+    model_config.model.params.personalization_config.params.initializer_words = init_words
+
     model_config.data.params.train.params.data_root = data_root
     model_config.data.params.validation.params.data_root = data_eval_root
 
@@ -124,9 +138,6 @@ if __name__ == "__main__":
     #model.embedding_manager.load("embeddings/purple/embedding_" + str(num) + ".pt")
     optimizer = torch.optim.AdamW(embedding_params, lr=model.learning_rate)
 
-    thestring="trilbyhat"
-    if not os.path.isdir(output_path +"/" + thestring):
-        os.mkdir(output_path +"/" + thestring)
     cur = time.time()
     themean = 0.0
     thelist=[]
@@ -153,18 +164,15 @@ if __name__ == "__main__":
             print("loss: ", loss)
             if not os.path.isdir(output_path + "/embeddings/"):
                 os.mkdir(output_path + "/embeddings/")
-            if not os.path.isdir(output_path + "/embeddings/" + thestring):
-                os.mkdir(output_path + "/embeddings/" + thestring)
-            model.embedding_manager.save(output_path + "/" +  "embeddings/" + thestring + "/embedding_" + str(i) + ".pt")
+            model.embedding_manager.save(output_path + "/" +  "embeddings/" + "/embedding_" + str(i) + ".pt")
+            
             if i%1==0 and j%100==0:
-                if not os.path.isdir(output_path + "/" + thestring):
-                    os.mkdir(output_path + "/" +thestring)
 
-                if not os.path.isdir(output_path + "/" + thestring + "/" + str(i)):
-                    os.mkdir(output_path + "/" +thestring + "/" + str(i))
+                if not os.path.isdir(output_path + "/" + str(i)):
+                    os.mkdir(output_path + "/" + str(i))
 
-                if not os.path.isdir(output_path + "/" + thestring + "/" + str(i) + "/" + str(j) + "/"):
-                    os.mkdir(output_path + "/" +thestring + "/" + str(i) + "/" +str(j) + "/")
+                if not os.path.isdir(output_path + "/" + str(i) + "/" + str(j) + "/"):
+                    os.mkdir(output_path + "/" + str(i) + "/" +str(j) + "/")
         
                 log = model.log_images(7.5, 1.5, raw_batch)
                 log_eval = model.log_images(7.5, 1.5, raw_eval_batch)
@@ -179,7 +187,7 @@ if __name__ == "__main__":
                 filename = str(loss.item()) + "_" + str(key) + "_" + str(j) + "_" + str(log["txt_scale"]) + \
                 "_" + str(log["image_scale"]) + ".jpg"
                 #pdb.set_trace()
-                im.save(output_path + "/" + thestring + "/" + str(i) + "/" + str(j) + "/" + filename)
+                im.save(output_path + "/" + str(i) + "/" + str(j) + "/" + filename)
                 #pdb.set_trace()
 
                 log_eval[key] = torch.clamp(log_eval[key].detach().cpu(),-1.,1)
@@ -191,7 +199,7 @@ if __name__ == "__main__":
                 im = Image.fromarray(grid)
                 filename = str(loss.item()) + "_" + "eval" + "_" + str(j) + "_" + str(log["txt_scale"]) + \
                 "_" + str(log["image_scale"]) + ".jpg"
-                im.save(output_path + "/" + thestring + "/" + str(i) + "/" + str(j) + "/" + filename)
+                im.save(output_path + "/" + str(i) + "/" + str(j) + "/" + filename)
                 #pdb.set_trace()
                 
                 
@@ -201,7 +209,7 @@ if __name__ == "__main__":
             thelist.append(loss.item())
             plt.figure()
             plt.plot(np.arange(0,len(thelist)),thelist)
-            plt.savefig(output_path  + "/" + thestring + "/" + "currentloss.png")
+            plt.savefig(output_path  + "/" + "currentloss.png")
             loss.backward()
             optimizer.step()
             #print(loss, "here")

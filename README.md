@@ -61,13 +61,16 @@ wget -O models/ldm/stable-diffusion-v1/instruct-pix2pix-00-22000.ckpt http://ins
 To invert an image set, run:
 
 ```
-python main.py --base configs/latent-diffusion/txt2img-1p4B-finetune.yaml 
-               -t 
-               --actual_resume /path/to/pretrained/model.ckpt 
-               -n <run_name> 
-               --gpus 0, 
-               --data_root /path/to/directory/with/images
-               --init_word <initialization_word>
+export DATA_ROOT=path/to/data
+export EDIT_ROOT=path/to/edit
+export EVAL_ROOT=path/to/eval
+export OUTPUT_PATH=path/to/output
+
+python train_inversion.py --data_root=$DATA_ROOT
+                          --edit_root=$EDIT_ROOT 
+                          --eval_root=$EVAL_ROOT
+                          --output_path=$OUTPUT_PATH
+                          --init_words word1 word2 word3
 ```
 
 where the initialization word should be a single-token rough description of the object (e.g., 'toy', 'painting', 'sculpture'). If the input is comprised of more than a single token, you will be prompted to replace it.
