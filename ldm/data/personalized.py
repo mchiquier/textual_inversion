@@ -147,9 +147,10 @@ class PersonalizedBase(Dataset):
                  ):
 
         self.data_root = data_root
+        self.edit_root = edit_root
 
         self.image_paths = [os.path.join(self.data_root, file_path) for file_path in os.listdir(self.data_root)]
-        self.image_paths_edited = [os.path.join(self.data_root + edit_root + "/", file_path) for file_path in os.listdir(self.data_root)]
+        self.image_paths_edited = [os.path.join(self.edit_root, file_path) for file_path in os.listdir(self.data_root)]
 
         # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
@@ -175,7 +176,8 @@ class PersonalizedBase(Dataset):
                               "bicubic": PIL.Image.BICUBIC,
                               "lanczos": PIL.Image.LANCZOS,
                               }[interpolation]
-        self.flip = transforms.RandomHorizontalFlip(p=flip_p)
+        self.flip_p = flip_p
+        # self.flip = transforms.RandomHorizontalFlip(p=flip_p)
 
 
     def __len__(self):
@@ -218,8 +220,11 @@ class PersonalizedBase(Dataset):
             image = image.resize((self.size, self.size), resample=self.interpolation)
             image_edited = image_edited.resize((self.size, self.size), resample=self.interpolation)
 
-        image = self.flip(image)
-        image_edited = self.flip(image_edited)
+        # image = self.flip(image)
+        # image_edited = self.flip(image_edited)
+        if np.random.rand() < self.flip_p:
+            image = transforms.functional.hflip(image)
+            image_edited = transforms.functional.hflip(image_edited)
         image = np.array(image).astype(np.uint8)
         image_edited = np.array(image_edited).astype(np.uint8)
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)

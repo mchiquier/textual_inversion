@@ -2,7 +2,7 @@
 # See more details in LICENSE.
 
 model:
-  base_learning_rate: 5.0e-7
+  base_learning_rate: 5.0e-3
   target: ldm.models.diffusion.ddpm_edit.LatentDiffusion
   params:
     ckpt_path: models/ldm/stable-diffusion-v1/instruct-pix2pix-00-22000.ckpt
@@ -68,7 +68,7 @@ model:
           - 4
           num_res_blocks: 2
           attn_resolutions: []
-          dropout: 0.0
+          dropout: 0.5
         lossconfig:
           target: torch.nn.Identity
 
