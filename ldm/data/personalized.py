@@ -147,9 +147,10 @@ class PersonalizedBase(Dataset):
                  ):
 
         self.data_root = data_root
+        self.data_root = data_root
 
         self.image_paths = [os.path.join(self.data_root, file_path) for file_path in os.listdir(self.data_root)]
-        self.image_paths_edited = [os.path.join(self.data_root + edit_root + "/", file_path) for file_path in os.listdir(self.data_root)]
+        self.image_paths_edited = [os.path.join(self.edit_root, file_path) for file_path in os.listdir(self.data_root)]
 
         # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
