@@ -1402,7 +1402,11 @@ class LatentDiffusion(DDPM):
             model_wrap = K.external.CompVisDenoiser(self)
             model_wrap_cfg = CFGDenoiser(model_wrap)
             null_token = self.get_learned_conditioning([""])
-            sigmas = model_wrap.get_sigmas(100)
+            
+            # BVH MOD
+            # sigmas = model_wrap.get_sigmas(100)
+            sigmas = model_wrap.get_sigmas(ddim_steps)
+            
             uncond={}
             list_of_x = []
             for i in range(c['c_crossattn'][0].shape[0]):

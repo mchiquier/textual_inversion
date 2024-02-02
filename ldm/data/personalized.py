@@ -6,6 +6,7 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 import pdb
 import random
+import glob
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -128,7 +129,8 @@ imagenet_dual_templates_small = [
 per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
-#per_img_token_list = ['b','c','d','e','f','g','h','i','j']
+# per_img_token_list = ['b','c','d','e','f','g','h','i','j']
+
 
 class PersonalizedBase(Dataset):
     def __init__(self,
@@ -138,6 +140,8 @@ class PersonalizedBase(Dataset):
                  repeats=100,
                  interpolation="bicubic",
                  flip_p=0.5,
+                 crop_p=0.0,
+                 procedural_task='ab',
                  set="train",
                  placeholder_token="*",
                  per_image_tokens=False,
@@ -149,12 +153,20 @@ class PersonalizedBase(Dataset):
         self.data_root = data_root
         self.edit_root = edit_root
 
-        self.image_paths = [os.path.join(self.data_root, file_path) for file_path in os.listdir(self.data_root)]
-        self.image_paths_edited = [os.path.join(self.edit_root, file_path) for file_path in os.listdir(self.data_root)]
+        # self.image_paths = [os.path.join(self.data_root, file_path)
+        #                     for file_path in os.listdir(self.data_root)]
+        # self.image_paths_edited = [os.path.join(self.edit_root, file_path)
+        #                            for file_path in os.listdir(self.data_root)]
+        self.image_paths = sorted(glob.glob(os.path.join(self.data_root, '*.*')))
+        self.image_paths_edited = sorted(glob.glob(os.path.join(self.edit_root, '*.*')))
 
         # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
-        self._length = self.num_images 
+        self.num_images_edited = len(self.image_paths_edited)
+        assert self.num_images == self.num_images_edited, \
+            (f"Number of images in data_root ({self.num_images}) and "
+             f"edit_root ({self.num_images_edited}) must match.")
+        self._length = self.num_images
 
         self.placeholder_token = placeholder_token
 
@@ -165,7 +177,10 @@ class PersonalizedBase(Dataset):
         self.coarse_class_text = coarse_class_text
 
         if per_image_tokens:
-            assert self.num_images < len(per_img_token_list), f"Can't use per-image tokens when the training set contains more than {len(per_img_token_list)} tokens. To enable larger sets, add more tokens to 'per_img_token_list'."
+            assert self.num_images < len(per_img_token_list), \
+                (f"Can't use per-image tokens when the training set "
+                 f"contains more than {len(per_img_token_list)} tokens. "
+                 f"To enable larger sets, add more tokens to 'per_img_token_list'.")
 
         if set == "train":
             self._length = self.num_images * repeats
@@ -176,9 +191,10 @@ class PersonalizedBase(Dataset):
                               "bicubic": PIL.Image.BICUBIC,
                               "lanczos": PIL.Image.LANCZOS,
                               }[interpolation]
-        self.flip_p = flip_p
-        # self.flip = transforms.RandomHorizontalFlip(p=flip_p)
 
+        self.flip_p = flip_p
+        self.crop_p = crop_p
+        self.procedural_task = procedural_task
 
     def __len__(self):
         return self._length
@@ -193,32 +209,40 @@ class PersonalizedBase(Dataset):
             image = image.convert("RGB")
             image_edited = image_edited.convert("RGB")
 
+        # TODO: what exactly is happening here?
         placeholder_string = self.placeholder_token
         if self.coarse_class_text:
             placeholder_string = f"{self.coarse_class_text} {placeholder_string}"
 
         if self.per_image_tokens and np.random.uniform() < self.mixing_prob:
-            text = random.choice(imagenet_dual_templates_small).format(placeholder_string, per_img_token_list[i % self.num_images])
+            text = random.choice(imagenet_dual_templates_small).format(
+                placeholder_string, per_img_token_list[i % self.num_images])
         else:
             text = random.choice(imagenet_templates_small).format(placeholder_string)
-            
+
+        # NOTE: caption seems to be overwritten in the trainnig loop anyway..
         example["caption"] = text
 
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)
         img_edited = np.array(image_edited).astype(np.uint8)
-        
+
         if self.center_crop:
-            crop = min(img.shape[0], img.shape[1])
-            h, w, = img.shape[0], img.shape[1]
-            img = img[(h - crop) // 2:(h + crop) // 2,
-                (w - crop) // 2:(w + crop) // 2]
+            # crop = min(img.shape[0], img.shape[1])
+            # h, w, = img.shape[0], img.shape[1]
+            # img = img[(h - crop) // 2:(h + crop) // 2,
+            #     (w - crop) // 2:(w + crop) // 2]
+
+            img = transforms.functional.center_crop(image, min(image.size))
+            img_edited = transforms.functional.center_crop(image_edited, min(image_edited.size))
 
         image = Image.fromarray(img)
         image_edited = Image.fromarray(img_edited)
         if self.size is not None:
-            image = image.resize((self.size, self.size), resample=self.interpolation)
-            image_edited = image_edited.resize((self.size, self.size), resample=self.interpolation)
+            image = image.resize((self.size, self.size),
+                                 resample=self.interpolation)
+            image_edited = image_edited.resize((self.size, self.size),
+                                               resample=self.interpolation)
 
         # image = self.flip(image)
         # image_edited = self.flip(image_edited)
