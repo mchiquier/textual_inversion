@@ -3,9 +3,9 @@ Created by Basile Van Hoorick, Jan 2024.
 
 cdb4 && cd VLC4D/textual_inversion
 ma p310cu118
-CUDA_VISIBLE_DEVICES=1 python basile_gradio.py \
+CUDA_VISIBLE_DEVICES=1 python basile_gradio.py --port=7881 \
 --output_path=../gradio_output_textinv/internal
-CUDA_VISIBLE_DEVICES=2 python basile_gradio.py \
+CUDA_VISIBLE_DEVICES=2 python basile_gradio.py --port=7882 \
 --output_path=../gradio_output_textinv/internal
 '''
 
@@ -377,7 +377,8 @@ def main_run(model_bundle, output_path, action,
 
 def run_demo(device='cuda',
              debug=True,
-             output_path='../gradio_output_textinv/default'):
+             output_path='../gradio_output_textinv/default',
+             port=7870):
 
     model_bundle = load_model_bundle(device)
 
@@ -520,7 +521,7 @@ def run_demo(device='cuda',
 
         gr.Markdown('Examples coming soon!')
 
-    demo.launch(enable_queue=True, share=True, debug=debug)
+    demo.launch(enable_queue=True, share=True, debug=debug, server_port=port)
 
 
 if __name__ == '__main__':
