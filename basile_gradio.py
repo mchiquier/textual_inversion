@@ -426,7 +426,7 @@ def run_demo(device='cuda',
                 which_rad = gr.Radio(
                     ['Dropdown path', 'Text path', 'Uploaded files'],
                     value='Dropdown path',
-                    label='Select which input to train and test the model')
+                    label='Select which input to train and test the model with')
                 center_crop_chk = gr.Checkbox(
                     True, label='Center crop to square aspect ratio')
 
@@ -434,7 +434,7 @@ def run_demo(device='cuda',
                 task_rad = gr.Radio(
                     ['Map A to B', 'Flip A', 'Invert A'],
                     value='Map A to B',
-                    label='How to supervise the model')
+                    label='How to supervise the model (todo not yet implemented)')
                 epochs_sld = gr.Slider(
                     1, 20, value=6, step=1,
                     label='Number of epochs')
