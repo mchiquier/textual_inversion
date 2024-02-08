@@ -396,16 +396,19 @@ def run_demo(device='cuda',
             with gr.Column(scale=0.9, variant='panel'):
 
                 gr.Markdown('*Select path to root data folder:*')
+                root_choices = [
+                    '/proj/vondrick4/VisualMacros/Photoshop/hat',
+                    '/proj/vondrick4/VisualMacros/Photoshop/reddot',
+                    '/proj/vondrick4/VisualMacros/NovelView/backpack',
+                    '/proj/vondrick4/VisualMacros/NovelView/car',
+                ]
                 root_drop = gr.Dropdown(
-                    [
-                        '/proj/vondrick4/VisualMacros/Photoshop/hat',
-                        '/proj/vondrick4/VisualMacros/Photoshop/reddot',
-                        '/proj/vondrick4/VisualMacros/NovelView/backpack',
-                        '/proj/vondrick4/VisualMacros/NovelView/car',
-                    ],
+                    root_choices,
                     value='/proj/vondrick4/VisualMacros/NovelView/backpack',
                     label='Path (must contain train-a, train-b, eval-a)'
                 )
+                refresh_btn = gr.Button(
+                    'Refresh Datasets', variant='secondary')
 
                 gr.Markdown('*Alternatively, type direct path to root data folder:*')
                 root_text = gr.Text(
@@ -495,6 +498,20 @@ def run_demo(device='cuda',
                     label='Test A to B (epochs are stacked vertically)')
                 loss_output = gr.Image(
                     label='Training loss curve')
+
+        def refresh_datasets():
+            # https://github.com/gradio-app/gradio/issues/6862#issuecomment-1866577714
+            root_choices = glob.glob(r'/proj/vondrick4/VisualMacros/**/train-a')
+            root_choices = [str(pathlib.Path(dp).parent) for dp in root_choices]
+            root_drop = gr.Dropdown(
+                root_choices,
+                value=root_choices[0],
+                label='Path (must contain train-a, train-b, eval-a)',
+                interactive=True,
+            )
+            return root_drop
+
+        refresh_btn.click(fn=refresh_datasets, outputs=[root_drop])
 
         data_btn.click(fn=partial(main_run, model_bundle, output_path, 'data'),
                        inputs=[root_drop, root_text,
