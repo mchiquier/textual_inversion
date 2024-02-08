@@ -152,6 +152,7 @@ def main_run(model_bundle, output_path, action,
             root_path = root_drop
         elif 'text' in which_one.lower():
             root_path = root_text
+        print(f'Using root_path: {root_path}')
 
         raw_train_a_fps = glob.glob(os.path.join(root_path, 'train-a', '*.*'))
         raw_train_b_fps = glob.glob(os.path.join(root_path, 'train-b', '*.*'))
