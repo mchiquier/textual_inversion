@@ -3,9 +3,9 @@ Created by Basile Van Hoorick, Jan 2024.
 
 cdb4 && cd VLC4D/textual_inversion
 ma p310cu118
-CUDA_VISIBLE_DEVICES=1 python basile_gradio.py --port=7881 \
+CUDA_VISIBLE_DEVICES=2 python basile_gradio.py --port=7881 \
 --output_path=../gradio_output_textinv/internal
-CUDA_VISIBLE_DEVICES=2 python basile_gradio.py --port=7882 \
+CUDA_VISIBLE_DEVICES=3 python basile_gradio.py --port=7882 \
 --output_path=../gradio_output_textinv/internal
 '''
 
@@ -408,7 +408,7 @@ def run_demo(device='cuda',
                     label='Path (must contain train-a, train-b, eval-a)'
                 )
                 refresh_btn = gr.Button(
-                    'Refresh Datasets', variant='secondary')
+                    'Discover Datasets', variant='secondary')
 
                 gr.Markdown('*Alternatively, type direct path to root data folder:*')
                 root_text = gr.Text(
@@ -501,8 +501,10 @@ def run_demo(device='cuda',
 
         def refresh_datasets():
             # https://github.com/gradio-app/gradio/issues/6862#issuecomment-1866577714
-            root_choices = glob.glob(r'/proj/vondrick4/VisualMacros/**/train-a')
-            root_choices = [str(pathlib.Path(dp).parent) for dp in root_choices]
+            root_choices = glob.glob(r'/proj/vondrick4/VisualMacros/*/*')
+            # glob.glob(r'/proj/vondrick4/VisualMacros/*')
+            print('root_choices:', root_choices)
+            # root_choices = [str(pathlib.Path(dp).parent) for dp in root_choices]
             root_drop = gr.Dropdown(
                 root_choices,
                 value=root_choices[0],
