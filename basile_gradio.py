@@ -197,6 +197,8 @@ def main_run(model_bundle, output_path, action,
     model_config.data.params.validation.params.data_root = raw_eval_a_dp
     model_config.data.params.train.params.edit_root = raw_train_b_dp
     model_config.data.params.validation.params.edit_root = raw_eval_a_dp
+    model_config.data.params.train.size = 256
+    model_config.data.params.validation.size = 256
     model_config.data.params.train.center_crop = center_crop
     model_config.data.params.validation.center_crop = center_crop
     model_config.data.params.train.flip_p = 0.5 if flip_aug else 0.0
