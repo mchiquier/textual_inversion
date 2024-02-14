@@ -145,6 +145,7 @@ class PersonalizedBase(Dataset):
                  repeats=100,
                  interpolation="bicubic",
                  flip_p=0.5,
+                 crop_p=0.0,
                  set="train",
                  placeholder_token="*",
                  per_image_tokens=False,
@@ -189,6 +190,7 @@ class PersonalizedBase(Dataset):
                               "lanczos": PIL.Image.LANCZOS,
                               }[interpolation]
         self.flip_p = flip_p
+        self.crop_p = crop_p
         # self.flip = transforms.RandomHorizontalFlip(p=flip_p)
 
 
@@ -243,7 +245,7 @@ class PersonalizedBase(Dataset):
                 image_edited = transforms.functional.hflip(image_edited)
                 
             # random cropping
-            if self.random_crop and np.random.rand() < self.flip_p:
+            if self.random_crop and np.random.rand() < self.crop_p:
                 padding = 20
                 fill = 0  # Fill with black
                 pad_transform = transforms.Pad(padding, fill=fill)

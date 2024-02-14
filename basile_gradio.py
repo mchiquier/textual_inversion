@@ -209,7 +209,7 @@ def main_run(model_bundle, output_path, action,
     model_config.data.params.train.params.gaussian_blur=True if blur_aug else False 
     model_config.data.params.train.params.gaussian_noise=True if noise_aug else False
     model_config.data.params.validation.params.flip_p = 0.0
-    model_config.data.params.train.params.crop_p = 0.5 if crop_aug else 0.0
+    model_config.data.params.train.params.crop_p = 0.8 if crop_aug else 0.0
     model_config.data.params.validation.params.crop_p = 0.0
     model_config.data.params.train.params.procedural_task = 'ab'  # TODO
 
