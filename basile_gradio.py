@@ -100,7 +100,7 @@ def main_run(model_bundle, output_path, action,
              input_file, edit_file, eval_file,
              which_one, center_crop,
              which_task, num_epochs, init_words,
-             flip_aug, crop_aug,
+             flip_aug, crop_aug, blur_aug, noise_aug,
              vectors_pt, text_cfg, image_cfg, ddim_steps):
     '''
     :param input_file: List of tempfile.TemporaryFileWrapper objects.
@@ -204,6 +204,10 @@ def main_run(model_bundle, output_path, action,
     model_config.data.params.train.params.center_crop = center_crop
     model_config.data.params.validation.params.center_crop = center_crop
     model_config.data.params.train.params.flip_p = 0.5 if flip_aug else 0.0
+    model_config.data.params.train.params.horizontal_flip=True if flip_aug else False
+    model_config.data.params.train.params.random_crop=True if crop_aug  else False
+    model_config.data.params.train.params.gaussian_blur=True if blur_aug else False 
+    model_config.data.params.train.params.gaussian_noise=True if noise_aug else False
     model_config.data.params.validation.params.flip_p = 0.0
     model_config.data.params.train.params.crop_p = 0.5 if crop_aug else 0.0
     model_config.data.params.validation.params.crop_p = 0.0
@@ -455,7 +459,12 @@ def run_demo(device='cuda',
                 flip_chk = gr.Checkbox(
                     True, label='Random horizontal flip')
                 crop_chk = gr.Checkbox(
-                    False, label='Random crop (todo not yet implemented)')
+                    False, label='Random crop')
+                blur_chk = gr.Checkbox(
+                    False, label='Gaussian blur')
+                noise_chk = gr.Checkbox(
+                    False, label='Gaussian noise')
+                
 
                 with gr.Accordion('Advanced options', open=False):
                     vectors_sld = gr.Slider(
@@ -525,7 +534,7 @@ def run_demo(device='cuda',
                                input_file, edit_file, eval_file,
                                which_rad, center_crop_chk,
                                task_rad, epochs_sld, words_sld,
-                               flip_chk, crop_chk,
+                               flip_chk, crop_chk, blur_chk, noise_chk,
                                vectors_sld, text_sld, image_sld, steps_sld],
                        outputs=[desc_output, data_output])
 
@@ -534,7 +543,7 @@ def run_demo(device='cuda',
                                 input_file, edit_file, eval_file,
                                 which_rad, center_crop_chk,
                                 task_rad, epochs_sld, words_sld,
-                                flip_chk, crop_chk,
+                                flip_chk, crop_chk, blur_chk, noise_chk, 
                                 vectors_sld, text_sld, image_sld, steps_sld],
                         outputs=[desc_output, train_output, test_output, loss_output])
 
