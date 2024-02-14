@@ -3,9 +3,9 @@ Created by Basile Van Hoorick, Jan 2024.
 
 cdb4 && cd VLC4D/textual_inversion
 ma p310cu118
-CUDA_VISIBLE_DEVICES=2 python basile_gradio.py --port=7881 \
+CUDA_VISIBLE_DEVICES=1 python basile_gradio.py --port=7881 \
 --output_path=../gradio_output_textinv/internal
-CUDA_VISIBLE_DEVICES=3 python basile_gradio.py --port=7882 \
+CUDA_VISIBLE_DEVICES=2 python basile_gradio.py --port=7882 \
 --output_path=../gradio_output_textinv/internal
 '''
 
@@ -71,6 +71,8 @@ Make sure to try "Visualize Data" first to verify whether the demo is responsive
 
 Warning: All results are saved to the disk of the server for reproducibility and debugging purposes.
 '''
+
+os.environ['GRADIO_TEMP_DIR'] = f'/tmp/gradio_{np.random.randint(1000, 10000)}'
 
 
 def load_model_bundle(device):
@@ -358,6 +360,7 @@ def main_run(model_bundle, output_path, action,
                 plt.imsave(os.path.join(vis_dp, f'test_{i:03d}_{j:03d}.jpg'), grid)
 
                 print(f'[yellow]Saved visuals')
+                print(f'[yellow]Current time: {time.strftime("%Y%m%d-%H%M%S")}')
 
                 plt.figure()
                 plt.plot(np.arange(0, len(thelist)), thelist)
@@ -543,7 +546,8 @@ def run_demo(device='cuda',
 
         gr.Markdown('Examples coming soon!')
 
-    demo.launch(enable_queue=True, share=True, debug=debug, server_port=port)
+    demo.queue(max_size=20)
+    demo.launch(share=True, debug=debug, server_port=port)
 
 
 if __name__ == '__main__':
