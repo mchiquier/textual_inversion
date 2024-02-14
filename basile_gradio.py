@@ -199,15 +199,15 @@ def main_run(model_bundle, output_path, action,
     model_config.data.params.validation.params.data_root = raw_eval_a_dp
     model_config.data.params.train.params.edit_root = raw_train_b_dp
     model_config.data.params.validation.params.edit_root = raw_eval_a_dp
-    model_config.data.params.train.size = 256
-    model_config.data.params.validation.size = 256
-    model_config.data.params.train.center_crop = center_crop
-    model_config.data.params.validation.center_crop = center_crop
-    model_config.data.params.train.flip_p = 0.5 if flip_aug else 0.0
-    model_config.data.params.validation.flip_p = 0.0
-    model_config.data.params.train.crop_p = 0.5 if crop_aug else 0.0
-    model_config.data.params.validation.crop_p = 0.0
-    model_config.data.params.train.procedural_task = 'ab'  # TODO
+    model_config.data.params.train.params.size = 256
+    model_config.data.params.validation.params.size = 256
+    model_config.data.params.train.params.center_crop = center_crop
+    model_config.data.params.validation.params.center_crop = center_crop
+    model_config.data.params.train.params.flip_p = 0.5 if flip_aug else 0.0
+    model_config.data.params.validation.params.flip_p = 0.0
+    model_config.data.params.train.params.crop_p = 0.5 if crop_aug else 0.0
+    model_config.data.params.validation.params.crop_p = 0.0
+    model_config.data.params.train.params.procedural_task = 'ab'  # TODO
 
     data = train_inversion.instantiate_from_config(model_config.data)
     data.prepare_data()
