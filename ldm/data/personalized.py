@@ -1,14 +1,15 @@
 import os
 import numpy as np
 import PIL
-from PIL import Image, ImageOps
-from torch.utils.data import Dataset
-from torchvision import transforms
+import glob
 import pdb
 import random
 import torchvision.transforms as T
 import torchvision.transforms.functional as F
 import torch
+from PIL import Image, ImageOps
+from torch.utils.data import Dataset
+from torchvision import transforms
 
 imagenet_templates_smallest = [
     'a photo of a {}',
@@ -131,43 +132,47 @@ imagenet_dual_templates_small = [
 per_img_token_list = [
     'א', 'ב', 'ג', 'ד', 'ה', 'ו', 'ז', 'ח', 'ט', 'י', 'כ', 'ל', 'מ', 'נ', 'ס', 'ע', 'פ', 'צ', 'ק', 'ר', 'ש', 'ת',
 ]
-#per_img_token_list = ['b','c','d','e','f','g','h','i','j']
+# per_img_token_list = ['b','c','d','e','f','g','h','i','j']
+
 
 class PersonalizedBase(Dataset):
     def __init__(self,
                  data_root,
                  edit_root,
+                 set="train",
+                 repeats=100,
+                 interpolation="bicubic",
+                 center_crop=False,
+                 size=None,
                  horizontal_flip=False,
                  random_crop=False,
                  gaussian_blur=False,
                  gaussian_noise=False,
-                 size=None,
-                 repeats=100,
-                 interpolation="bicubic",
                  flip_p=0.5,
-                 crop_p=0.0,
-                 set="train",
+                 crop_p=0.8,
+                 blur_p=0.4,
+                 noise_p=0.4,
                  placeholder_token="*",
                  per_image_tokens=False,
-                 center_crop=False,
                  mixing_prob=0.25,
                  coarse_class_text=None,
                  ):
 
         self.data_root = data_root
         self.edit_root = edit_root
-        
+
         self.horizontal_flip = horizontal_flip
         self.random_crop = random_crop
         self.gaussian_blur = gaussian_blur
         self.gaussian_noise = gaussian_noise
-        
-        self.image_paths = [os.path.join(self.data_root, file_path) for file_path in os.listdir(self.data_root)]
-        self.image_paths_edited = [os.path.join(self.edit_root, file_path) for file_path in os.listdir(self.data_root)]
+
+        self.image_paths = sorted(glob.glob(os.path.join(self.data_root, '*.*')))
+        self.image_paths_edited = sorted(glob.glob(os.path.join(self.edit_root, '*.*')))
 
         # self._length = len(self.image_paths)
         self.num_images = len(self.image_paths)
-        self._length = self.num_images 
+        self.num_images_edited = len(self.image_paths_edited)
+        self._length = self.num_images
 
         self.placeholder_token = placeholder_token
 
@@ -178,7 +183,10 @@ class PersonalizedBase(Dataset):
         self.coarse_class_text = coarse_class_text
         self.set = set
         if per_image_tokens:
-            assert self.num_images < len(per_img_token_list), f"Can't use per-image tokens when the training set contains more than {len(per_img_token_list)} tokens. To enable larger sets, add more tokens to 'per_img_token_list'."
+            assert self.num_images < len(per_img_token_list), \
+                (f"Can't use per-image tokens when the training set "
+                 f"contains more than {len(per_img_token_list)} tokens. "
+                 f"To enable larger sets, add more tokens to 'per_img_token_list'.")
 
         if set == "train":
             self._length = self.num_images * repeats
@@ -191,8 +199,8 @@ class PersonalizedBase(Dataset):
                               }[interpolation]
         self.flip_p = flip_p
         self.crop_p = crop_p
-        # self.flip = transforms.RandomHorizontalFlip(p=flip_p)
-
+        self.blur_p = blur_p
+        self.noise_p = noise_p
 
     def __len__(self):
         return self._length
@@ -207,98 +215,93 @@ class PersonalizedBase(Dataset):
             image = image.convert("RGB")
             image_edited = image_edited.convert("RGB")
 
+        # TODO: what exactly is happening here?
         placeholder_string = self.placeholder_token
         if self.coarse_class_text:
             placeholder_string = f"{self.coarse_class_text} {placeholder_string}"
 
         if self.per_image_tokens and np.random.uniform() < self.mixing_prob:
-            text = random.choice(imagenet_dual_templates_small).format(placeholder_string, per_img_token_list[i % self.num_images])
+            text = random.choice(imagenet_dual_templates_small).format(
+                placeholder_string, per_img_token_list[i % self.num_images])
         else:
             text = random.choice(imagenet_templates_small).format(placeholder_string)
-            
+
+        # NOTE: caption seems to be overwritten in the trainnig loop anyway..
         example["caption"] = text
 
         # default to score-sde preprocessing
         img = np.array(image).astype(np.uint8)
         img_edited = np.array(image_edited).astype(np.uint8)
-        
-        if self.center_crop:
-            crop = min(img.shape[0], img.shape[1])
-            h, w, = img.shape[0], img.shape[1]
-            img = img[(h - crop) // 2:(h + crop) // 2,
-                (w - crop) // 2:(w + crop) // 2]
 
+        # First center crop.
+        if self.center_crop:
+            img = transforms.functional.center_crop(
+                image, min(image.size))
+            img_edited = transforms.functional.center_crop(
+                image_edited, min(image_edited.size))
+
+        # Then random crop if applicable.
+        if 'train' in self.set.lower():
+            # random cropping
+            if self.random_crop and np.random.rand() < self.crop_p:
+                # Crop to random square that is 80% of the smallest image dimension.
+                width, height = image.size
+                crop_size = int(min(width, height) * 0.8)
+
+                # Randomly choose top left corner.
+                i = np.random.randint(0, height - crop_size)
+                j = np.random.randint(0, width - crop_size)
+
+                # Apply the same crop to both images
+                image = transforms.functional.crop(
+                    image, i, j, crop_size, crop_size)
+                image_edited = transforms.functional.crop(
+                    image_edited, i, j, crop_size, crop_size)
+
+        # Then resize to final model size.
         image = Image.fromarray(img)
         image_edited = Image.fromarray(img_edited)
         if self.size is not None:
-            image = image.resize((self.size, self.size), resample=self.interpolation)
-            image_edited = image_edited.resize((self.size, self.size), resample=self.interpolation)
+            image = image.resize((self.size, self.size),
+                                 resample=self.interpolation)
+            image_edited = image_edited.resize((self.size, self.size),
+                                               resample=self.interpolation)
 
-        # image = self.flip(image)
-        # image_edited = self.flip(image_edited)
-
-        
-        if self.set == "train":
+        # Finally apply all other random data augmentations if applicable.
+        if 'train' in self.set.lower():
             # random horizontal flip
             if self.horizontal_flip and np.random.rand() < self.flip_p:
                 image = transforms.functional.hflip(image)
                 image_edited = transforms.functional.hflip(image_edited)
-                
-            # random cropping
-            if self.random_crop and np.random.rand() < self.crop_p:
-                padding = 20
-                fill = 0  # Fill with black
-                pad_transform = transforms.Pad(padding, fill=fill)
-                image = pad_transform(image)
-                image_edited = pad_transform(image_edited)
-                
-                # Get the size of the padded images
-                width, height = image.size
-            
-                # Assuming you have the desired crop size
-                crop_height, crop_width = 256, 256  # Adjust to your needs
-                
-                # Ensure the crop size is smaller than the image size
-                assert height >= crop_height and width >= crop_width, "Crop size must be smaller than image size."
-                
-                # Randomly choose top left corner of the crop
-                i = np.random.randint(0, height - crop_height + 1)
-                j = np.random.randint(0, width - crop_width + 1)
-            
-                # Create the crop transform
-                crop_transform = transforms.functional.crop
-                
-                # Apply the same crop to both images
-                image = crop_transform(image, i, j, crop_height, crop_width)
-                image_edited = crop_transform(image_edited, i, j, crop_height, crop_width)
-                
+
             # gaussian blurring
-            if self.gaussian_blur and np.random.rand() < self.flip_p:
+            if self.gaussian_blur and np.random.rand() < self.blur_p:
                 sigma = torch.rand(1) * (2 - 0.1) + 0.1
                 # gausian_blur_transformation_13 = T.GaussianBlur(kernel_size=(3, 7), sigma=(0.1, 2))
                 image = F.gaussian_blur(image, (3, 7), [sigma, sigma])
                 image_edited = F.gaussian_blur(image_edited, (3, 7), [sigma, sigma])
-                
+
                 # image = gausian_blur_transformation_13(image)
                 # image_edited = gausian_blur_transformation_13(image_edited)
-    
+
             # add gaussian noise
-            if self.gaussian_noise and np.random.rand() < self.flip_p:
+            if self.gaussian_noise and np.random.rand() < self.noise_p:
                 image_np = np.array(image)
                 image_edited_np = np.array(image_edited)
-                
+
                 noise = np.random.normal(0, 1, image_np.shape)
                 noisy_image_np = image_np + noise
                 noisy_image_edited_np = image_edited_np + noise
-    
+
                 noisy_image_np = np.clip(noisy_image_np, 0, 255)
                 noisy_image_edited_np = np.clip(noisy_image_edited_np, 0, 255)
-                
+
                 image = Image.fromarray(noisy_image_np.astype(np.uint8))
                 image_edited = Image.fromarray(noisy_image_edited_np.astype(np.uint8))
-            
+
         image = np.array(image).astype(np.uint8)
         image_edited = np.array(image_edited).astype(np.uint8)
         example["image"] = (image / 127.5 - 1.0).astype(np.float32)
         example["edited"] = (image_edited / 127.5 - 1.0).astype(np.float32)
+
         return example
