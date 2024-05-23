@@ -1,7 +1,11 @@
+
 models/ldm/text2img-large/model.ckpt
 models/ldm/stable-diffusion-v1/v1-5-pruned-emaonly.ckpt
 models/ldm/stable-diffusion-v1/instruct-pix2pix-00-22000.ckpt
 outputs/
 logs/
 .vscode
-*__pycache__*
+**/*.ckpt
+*.pyc
+*pycache*
+results_basile/

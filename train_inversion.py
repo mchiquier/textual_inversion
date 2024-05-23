@@ -1,21 +1,29 @@
-import argparse, os, sys, datetime, glob, importlib, csv
+import argparse
+import os
+import sys
+import datetime
+import glob
+import importlib
+import csv
 import torch
 from omegaconf import OmegaConf
 from torch.utils.data import random_split, DataLoader, Dataset, Subset
 import time
 from ldm.util import instantiate_from_config
-from ldm.data.personalized import  PersonalizedBase
+from ldm.data.personalized import PersonalizedBase
 from ldm.models.diffusion.ddpm_edit import LatentDiffusion
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 import pdb
 import torchvision
-import numpy as np 
+import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
 
 '''
 helper functions
 '''
+
+
 def load_model_from_config(config, ckpt, verbose=False):
     print(f"Loading model from {ckpt}")
 
@@ -25,13 +33,14 @@ def load_model_from_config(config, ckpt, verbose=False):
     model = instantiate_from_config(config.model)
     m, u = model.load_state_dict(sd, strict=False)
     if len(m) > 0 and verbose:
-        print("missing keys:")
-        print(m)
+        print("missing keys:", len(m))
+        print(m[0:10])
     if len(u) > 0 and verbose:
-        print("unexpected keys:")
-        print(u)
+        print("unexpected keys:", len(u))
+        print(u[0:10])
 
     return model
+
 
 def set_lr(model, config):
     # configure learning rate
@@ -43,37 +52,40 @@ def set_lr(model, config):
     print(
         "Setting learning rate to {:.2e} = {} (accumulate_grad_batches) * {} (num_gpus) * {} (batchsize) * {:.2e} (base_lr)".format(
             model.learning_rate, accumulate_grad_batches, ngpu, bs, base_lr))
-    
+
+
 def get_parser(**parser_kwargs):
 
     parser = argparse.ArgumentParser(**parser_kwargs)
-    parser.add_argument("--data_root", 
-        type=str, 
-        required=True, 
-        help="Path to directory with training images")
-    
-    parser.add_argument("--edit_root", 
-        type=str, 
-        required=True, 
-        help="Path to directory with edited images")
-    
-    parser.add_argument("--eval_root", 
-        type=str, 
-        required=True, 
-        help="Path to directory with edited images")
-    
-    parser.add_argument("--output_path", 
-        type=str, 
-        required=True, 
-        help="Path to save the results")
-    
-    parser.add_argument('--init_words', nargs='+', help='A list of strings')
-    
-    
+    parser.add_argument("--data_root",
+                        type=str,
+                        required=True,
+                        help="Path to directory with training images")
+
+    parser.add_argument("--edit_root",
+                        type=str,
+                        required=True,
+                        help="Path to directory with edited images")
+
+    parser.add_argument("--eval_root",
+                        type=str,
+                        required=True,
+                        help="Path to directory with edited images")
+
+    parser.add_argument("--output_path",
+                        type=str,
+                        required=True,
+                        help="Path to save the results")
+
+    parser.add_argument('--init_words', nargs='+',
+                        default=['word1', 'word2'],
+                        help='A list of strings')
+
     return parser
-    
+
+
 if __name__ == "__main__":
-    
+
     parser = get_parser()
     opt = parser.parse_args()
     '''
@@ -86,9 +98,8 @@ if __name__ == "__main__":
     data_eval_root = opt.eval_root
     output_path = opt.output_path
     init_words = opt.init_words
-    if not os.path.isdir(output_path):
-        os.mkdir(output_path)
-    device=0
+    os.makedirs(output_path, exist_ok=True)
+    device = 0
 
     '''
     initialize model
@@ -126,93 +137,97 @@ if __name__ == "__main__":
     val_loader = data._val_dataloader()
 
     raw_eval_batch = next(iter(val_loader))
-    #torch.manual_seed(0)
-    noise=None
+    # torch.manual_seed(0)
+    noise = None
     raw_eval_batch['edited'] = raw_eval_batch['edited'].to(device)
     raw_eval_batch['image'] = raw_eval_batch['image'].to(device)
-    raw_eval_batch['caption'] = ['*']*raw_eval_batch['image'].shape[0]
+    raw_eval_batch['caption'] = ['*'] * raw_eval_batch['image'].shape[0]
 
     set_lr(model, model_config)
-    embedding_params = list(model.embedding_manager.embedding_parameters())#[self.parametersdiff]
-    num=100
-    #model.embedding_manager.load("embeddings/purple/embedding_" + str(num) + ".pt")
+    embedding_params = list(model.embedding_manager.embedding_parameters())  # [self.parametersdiff]
+    num = 100
+    # model.embedding_manager.load("embeddings/purple/embedding_" + str(num) + ".pt")
     optimizer = torch.optim.AdamW(embedding_params, lr=model.learning_rate)
 
     cur = time.time()
     themean = 0.0
-    thelist=[]
+    thelist = []
     for i in range(6):
         print(i, "iteration")
-        for j,raw_batch in enumerate(train_loader):
-            print("iteration: ", i,"example in training set #: ", j)
+
+        for j, raw_batch in enumerate(train_loader):
+            print("iteration: ", i, "example in training set #: ", j)
+
             x_start = raw_batch['edited']
             raw_batch['edited'] = raw_batch['edited'].to(device)
             raw_batch['image'] = raw_batch['image'].to(device)
-            #raw_batch['caption'] = ['make the statue purple']*raw_batch['image'].shape[0]
+            # raw_batch['caption'] = ['make the statue purple']*raw_batch['image'].shape[0]
             newbatch = model.get_input(raw_batch, 'edited')
-            #raw_batch['caption'] = ['make the statue *']*raw_batch['image'].shape[0]
-            raw_batch['caption'] = ['*']*raw_batch['image'].shape[0]
+            # raw_batch['caption'] = ['make the statue *']*raw_batch['image'].shape[0]
+            raw_batch['caption'] = ['*'] * raw_batch['image'].shape[0]
             batch = model.get_input(raw_batch, 'edited')
 
             optimizer.zero_grad()
-            
+
             # calls p_losses
             # noise = default(noise, lambda: torch.randn_like(batch[0])).to(device)
             noise = torch.randn_like(batch[0]).to(device)
             t = torch.randint(0, 1000, (batch[0].shape[0],)).long().to('cuda')
-            loss, loss_dict = model(batch[0], batch[1],t, noise)
+            loss, loss_dict = model(batch[0], batch[1], t, noise)
             print("loss: ", loss)
             if not os.path.isdir(output_path + "/embeddings/"):
                 os.mkdir(output_path + "/embeddings/")
-            model.embedding_manager.save(output_path + "/" +  "embeddings/" + "/embedding_" + str(i) + ".pt")
-            
-            if i%1==0 and j%100==0:
+            model.embedding_manager.save(
+                output_path + "/" + "embeddings/" + "/embedding_" + str(i) + ".pt")
+
+            if i % 1 == 0 and j % 100 == 0:
 
                 if not os.path.isdir(output_path + "/" + str(i)):
                     os.mkdir(output_path + "/" + str(i))
 
                 if not os.path.isdir(output_path + "/" + str(i) + "/" + str(j) + "/"):
-                    os.mkdir(output_path + "/" + str(i) + "/" +str(j) + "/")
-        
+                    os.mkdir(output_path + "/" + str(i) + "/" + str(j) + "/")
+
                 log = model.log_images(7.5, 1.5, raw_batch)
                 log_eval = model.log_images(7.5, 1.5, raw_eval_batch)
-                key ='samples'
-                log[key] = torch.clamp(log[key].detach().cpu(),-1.,1)
+                key = 'samples'
+                log[key] = torch.clamp(log[key].detach().cpu(), -1., 1)
                 grid = torchvision.utils.make_grid(log[key], nrow=4)
-                grid = (grid + 1.0) / 2.0 
+                grid = (grid + 1.0) / 2.0
                 grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
                 grid = grid.numpy()
                 grid = (grid * 255).astype(np.uint8)
                 im = Image.fromarray(grid)
                 filename = str(loss.item()) + "_" + str(key) + "_" + str(j) + "_" + str(log["txt_scale"]) + \
-                "_" + str(log["image_scale"]) + ".jpg"
-                #pdb.set_trace()
+                    "_" + str(log["image_scale"]) + ".jpg"
+                # pdb.set_trace()
                 im.save(output_path + "/" + str(i) + "/" + str(j) + "/" + filename)
-                #pdb.set_trace()
+                # pdb.set_trace()
 
-                log_eval[key] = torch.clamp(log_eval[key].detach().cpu(),-1.,1)
+                log_eval[key] = torch.clamp(log_eval[key].detach().cpu(), -1., 1)
                 grid = torchvision.utils.make_grid(log_eval[key], nrow=4)
-                grid = (grid + 1.0) / 2.0 
+                grid = (grid + 1.0) / 2.0
                 grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
                 grid = grid.numpy()
                 grid = (grid * 255).astype(np.uint8)
                 im = Image.fromarray(grid)
                 filename = str(loss.item()) + "_" + "eval" + "_" + str(j) + "_" + str(log["txt_scale"]) + \
-                "_" + str(log["image_scale"]) + ".jpg"
+                    "_" + str(log["image_scale"]) + ".jpg"
                 im.save(output_path + "/" + str(i) + "/" + str(j) + "/" + filename)
-                #pdb.set_trace()
-                
-                
-            #print(loss)
-            
-            
+                # pdb.set_trace()
+
+            # print(loss)
+
             thelist.append(loss.item())
+
             plt.figure()
-            plt.plot(np.arange(0,len(thelist)),thelist)
-            plt.savefig(output_path  + "/" + "currentloss.png")
+            plt.plot(np.arange(0, len(thelist)), thelist)
+            plt.savefig(output_path + "/" + "currentloss.png")
+            plt.close()
+
             loss.backward()
             optimizer.step()
-            #print(loss, "here")
+            # print(loss, "here")
 
             if model.use_scheduler:
                 lr = model.optimizers().param_groups[0]['lr']
@@ -220,5 +235,10 @@ if __name__ == "__main__":
 
             new = time.time()
 
-    # pdb.set_trace()
+        print('end of epoch')
+        print()
 
+    print('end of script')
+    print()
+
+    # pdb.set_trace()
