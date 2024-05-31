@@ -5,6 +5,7 @@ from diffusers import StableDiffusionPipeline
 import numpy as np
 from magnification.prompt2prompt import ptp_utils
 from magnification.prompt2prompt.attention_controllers import (
+    AttentionReplace,
     AttentionStore,
     EmptyControl,
 )
@@ -123,8 +124,11 @@ def run_and_display(
 
 
 def main():
+    device_id = 4
     device = (
-        torch.device("cuda:0") if torch.cuda.is_available() else torch.device("cpu")
+        torch.device(f"cuda:{device_id}")
+        if torch.cuda.is_available()
+        else torch.device("cpu")
     )
     ldm_stable = StableDiffusionPipeline.from_pretrained(
         "CompVis/stable-diffusion-v1-4"
@@ -132,7 +136,10 @@ def main():
     tokenizer = ldm_stable.tokenizer
 
     g_cpu = torch.Generator().manual_seed(8888)
-    prompts = ["A painting of a squirrel eating a burger"]
+    prompts = [
+        "A painting of a squirrel eating a burger",
+        "A painting of a lion eating a burger",
+    ]
     controller = AttentionStore()
     image, x_t = run_and_display(
         model=ldm_stable,
@@ -142,12 +149,20 @@ def main():
         run_baseline=False,
         generator=g_cpu,
     )
-    show_cross_attention(
-        attention_store=controller,
-        tokenizer=tokenizer,
+    controller = AttentionReplace(
         prompts=prompts,
-        res=16,
-        from_where=("up", "down"),
+        num_steps=NUM_DIFFUSION_STEPS,
+        tokenizer=tokenizer,
+        cross_replace_steps=0.8,
+        self_replace_steps=0.4,
+        device=device
+    )
+    _ = run_and_display(
+        model=ldm_stable,
+        prompts=prompts,
+        controller=controller,
+        latent=x_t,
+        run_baseline=False,
     )
 
 
