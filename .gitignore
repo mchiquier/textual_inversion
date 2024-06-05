@@ -9,3 +9,6 @@ logs/
 *.pyc
 *pycache*
 results_basile/
+*.png
+*.pt
+*.jpg
