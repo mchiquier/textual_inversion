@@ -39,6 +39,7 @@ class LDM(nn.Module):
             model_id, safety_checker=None
         )
         self.noise_scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
+        # self.noise_scheduler = EulerAncestralDiscreteScheduler.from_config(self.pipe.scheduler.config)
         self.text_encoder = FrozenCLIPEncoder().requires_grad_(False)
         self.vae = self.pipe.vae.requires_grad_(False)
         self.unet = self.pipe.unet.requires_grad_(False)
@@ -54,7 +55,7 @@ class LDM(nn.Module):
         prompt: Union[str, list[str]] = None,
         generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     ):
-        edited_image = self.pipe.image_processor.preprocess(edited_image)
+        # edited_image = self.pipe.image_processor.preprocess(edited_image)
         latents = self.vae.encode(edited_image).latent_dist.sample()
         latents = latents * self.vae.config.scaling_factor
 
@@ -65,7 +66,7 @@ class LDM(nn.Module):
 
         # Get the additional image embedding for conditioning.
         # Instead of getting a diagonal Gaussian here, we simply take the mode.
-        image = self.pipe.image_processor.preprocess(image)
+        # image = self.pipe.image_processor.preprocess(image)
         original_image_embeds = self.vae.encode(image).latent_dist.mode()
 
         # Sample noise that we'll add to the latents
@@ -170,10 +171,12 @@ class LDM(nn.Module):
         if self.do_classifier_free_guidance:
             uncond_tokens = [""] * batch_size
             negative_prompt_embeds = self.text_encoder(uncond_tokens)
-            prompt_embeds = torch.cat([prompt_embeds, negative_prompt_embeds, negative_prompt_embeds])
+            prompt_embeds = torch.cat(
+                [prompt_embeds, negative_prompt_embeds, negative_prompt_embeds]
+            )
 
         # 3. Preprocess image
-        image = self.pipe.image_processor.preprocess(image)
+        # image = self.pipe.image_processor.preprocess(image)
 
         # 4. set timesteps
         self.noise_scheduler.set_timesteps(num_inference_steps)
@@ -215,7 +218,7 @@ class LDM(nn.Module):
 
         # 9. Denoising loop
         self._num_timesteps = len(timesteps)
-        for i, t in tqdm(enumerate(timesteps)):
+        for t in tqdm(timesteps, total=len(timesteps)):
             # Expand the latents if we are doing classifier free guidance.
             # The latents are expanded 3 times because for pix2pix the guidance\
             # is applied for both the text and the input image.
@@ -358,7 +361,9 @@ class LDM(nn.Module):
 def main(cfg: TextualInversionConfig):
     device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
 
-    transform = None
+    transform = transform = transforms.Compose(
+        [transforms.Resize(cfg.dataset.img_size), transforms.RandomHorizontalFlip()]
+    )
     dataset = ConcatDataset(
         [
             TextualInversionEdits(
@@ -403,7 +408,10 @@ def main(cfg: TextualInversionConfig):
         print(f"embed-mean: {embed_mean}")
 
         # visualize samples
-        sample = ldm.sample(image, prompt, output_type="pt")
+        sample = ldm.sample(
+            image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps
+        )
+        sample = sample.detach().cpu()
         sample = torch.clamp(sample.detach().cpu(), -1.0, 1)
         grid = make_grid(sample, nrow=4)
         grid = (grid + 1.0) / 2.0
