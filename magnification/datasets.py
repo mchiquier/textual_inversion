@@ -101,12 +101,13 @@ class TextualInversionEdits(ImageEdits):
 
         images = np.concatenate([image, image_edit])
         images = torch.tensor(images)
-        images = 2 * (images / 255) - 1
 
         if self.transform:
             images = self.transform(images)
 
         image, image_edit = images.chunk(2)
+        image = image / 127.5 - 1.0
+        image_edit = image_edit / 127.5 - 1.0
         # TODO: support multiple placeholder strings
         prompt = self.placeholder_str[0]
         return image, image_edit, prompt

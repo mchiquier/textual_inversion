@@ -35,6 +35,7 @@ class TextualInversionConfig:
     learning_rate: float
     device: int
     output_dir: Path
+    num_inference_steps: int
 
     def __post_init__(self):
         self.output_dir.mkdir(exist_ok=True, parents=True)

@@ -26,6 +26,8 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 import numpy as np
 
+from ldm.util import instantiate_from_config
+
 
 class LDM(nn.Module):
     def __init__(
@@ -170,9 +172,9 @@ class LDM(nn.Module):
         )
         if self.do_classifier_free_guidance:
             uncond_tokens = [""] * batch_size
-            negative_prompt_embeds = self.text_encoder(uncond_tokens)
+            uncond_embeds = self.text_encoder.encode(uncond_tokens, embedding_manager=self.embedding_manager)
             prompt_embeds = torch.cat(
-                [prompt_embeds, negative_prompt_embeds, negative_prompt_embeds]
+                [prompt_embeds, uncond_embeds, uncond_embeds]
             )
 
         # 3. Preprocess image
@@ -409,10 +411,10 @@ def main(cfg: TextualInversionConfig):
 
         # visualize samples
         sample = ldm.sample(
-            image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps
+            image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps, eta=1.
         )
         sample = sample.detach().cpu()
-        sample = torch.clamp(sample.detach().cpu(), -1.0, 1)
+        # sample = torch.clamp(sample.detach().cpu(), -1.0, 1)
         grid = make_grid(sample, nrow=4)
         grid = (grid + 1.0) / 2.0
         grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
