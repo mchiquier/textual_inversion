@@ -33,39 +33,35 @@ class LDM(nn.Module):
     ) -> None:
         super().__init__()
         self.conditioning_dropout_prob = conditioning_dropout_prob
-        self.generator = torch.Generator().manual_seed(42)
 
         model_id = "timbrooks/instruct-pix2pix"
         self.pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
             model_id, safety_checker=None
         )
         self.noise_scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
-        self.noise_scheduler = EulerAncestralDiscreteScheduler.from_config(
-            self.pipe.scheduler.config
-        )
-        # self.text_encoder = self.instruct_p2p.text_encoder
-        self.text_encoder = FrozenCLIPEncoder()
-        self.tokenizer = self.pipe.tokenizer
-        self.vae = self.pipe.vae
-        self.unet = self.pipe.unet
+        self.text_encoder = FrozenCLIPEncoder().requires_grad_(False)
+        self.vae = self.pipe.vae.requires_grad_(False)
+        self.unet = self.pipe.unet.requires_grad_(False)
 
         self.embedding_manager = EmbeddingManager(
             **embedding_config, embedder=self.text_encoder
-        )
-        self.embedding_params = list(self.embedding_manager.embedding_parameters())
+        ).requires_grad_(True)
 
     def forward(
         self,
         image: torch.Tensor,
         edited_image: torch.Tensor,
         prompt: Union[str, list[str]] = None,
+        generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     ):
         edited_image = self.pipe.image_processor.preprocess(edited_image)
         latents = self.vae.encode(edited_image).latent_dist.sample()
         latents = latents * self.vae.config.scaling_factor
 
         # Get the text embedding for conditioning.
-        prompt_embeds = self.text_encoder(prompt)
+        prompt_embeds = self.text_encoder.encode(
+            prompt, embedding_manager=self.embedding_manager
+        )
 
         # Get the additional image embedding for conditioning.
         # Instead of getting a diagonal Gaussian here, we simply take the mode.
@@ -86,10 +82,11 @@ class LDM(nn.Module):
 
         # Add noise to the latents according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
+        # In DDIM and DDPM it similar to q_sample implementation of the original diffusion repo
         noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
 
         if self.conditioning_dropout_prob is not None:
-            random_p = torch.rand(bsz, device=latents.device, generator=self.generator)
+            random_p = torch.rand(bsz, device=latents.device, generator=generator)
             # only use image masking for classifier-free guidance
 
             # Sample masks for the edit prompts.
@@ -166,8 +163,14 @@ class LDM(nn.Module):
 
         # 2. Encode input prompt
         prompt_embeds = (
-            self.text_encoder(prompt) if prompt_embeds is None else prompt_embeds
+            self.text_encoder.encode(prompt, embedding_manager=self.embedding_manager)
+            if prompt_embeds is None
+            else prompt_embeds
         )
+        if self.do_classifier_free_guidance:
+            uncond_tokens = [""] * batch_size
+            negative_prompt_embeds = self.text_encoder(uncond_tokens)
+            prompt_embeds = torch.cat([prompt_embeds, negative_prompt_embeds, negative_prompt_embeds])
 
         # 3. Preprocess image
         image = self.pipe.image_processor.preprocess(image)
@@ -177,7 +180,7 @@ class LDM(nn.Module):
         timesteps = self.noise_scheduler.timesteps
 
         # 5. Prepare Image latents
-        image_latents = self.vae.encode(image).latent_dist.mode()
+        image_latents = self.prepare_image_latents(image)
 
         height, width = image_latents.shape[-2:]
         height = height * self.vae.config.scaling_factor
@@ -212,49 +215,47 @@ class LDM(nn.Module):
 
         # 9. Denoising loop
         self._num_timesteps = len(timesteps)
-        for _ in tqdm(range(num_inference_steps)):
-            for i, t in enumerate(timesteps):
-                # Expand the latents if we are doing classifier free guidance.
-                # The latents are expanded 3 times because for pix2pix the guidance\
-                # is applied for both the text and the input image.
-                latent_model_input = (
-                    torch.cat([latents] * 3, dim=1)
-                    if self.do_classifier_free_guidance
-                    else latents
+        for i, t in tqdm(enumerate(timesteps)):
+            # Expand the latents if we are doing classifier free guidance.
+            # The latents are expanded 3 times because for pix2pix the guidance\
+            # is applied for both the text and the input image.
+            latent_model_input = (
+                torch.cat([latents] * 3)
+                if self.do_classifier_free_guidance
+                else latents
+            )
+
+            # concat latents, image_latents in the channel dimension
+            scaled_latent_model_input = self.noise_scheduler.scale_model_input(
+                latent_model_input, t
+            )
+            scaled_latent_model_input = torch.cat(
+                [scaled_latent_model_input, image_latents], dim=1
+            )
+
+            # predict the noise residual
+            noise_pred = self.unet(
+                scaled_latent_model_input,
+                t,
+                prompt_embeds,
+                return_dict=False,
+            )[0]
+
+            # perform guidance
+            if self.do_classifier_free_guidance:
+                noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(
+                    3
+                )
+                noise_pred = (
+                    noise_pred_uncond
+                    + self.guidance_scale * (noise_pred_text - noise_pred_image)
+                    + self.image_guidance_scale * (noise_pred_image - noise_pred_uncond)
                 )
 
-                # concat latents, image_latents in the channel dimension
-                scaled_latent_model_input = self.noise_scheduler.scale_model_input(
-                    latent_model_input, t
-                )
-                scaled_latent_model_input = torch.cat(
-                    [scaled_latent_model_input, image_latents], dim=1
-                )
-
-                # predict the noise residual
-                noise_pred = self.unet(
-                    scaled_latent_model_input,
-                    t,
-                    prompt_embeds,
-                    return_dict=False,
-                )[0]
-
-                # perform guidance
-                if self.do_classifier_free_guidance:
-                    noise_pred_text, noise_pred_image, noise_pred_uncond = (
-                        noise_pred.chunk(3)
-                    )
-                    noise_pred = (
-                        noise_pred_uncond
-                        + self.guidance_scale * (noise_pred_text - noise_pred_image)
-                        + self.image_guidance_scale
-                        * (noise_pred_image - noise_pred_uncond)
-                    )
-
-                # compute the previous noisy sample x_t -> x_t-1
-                latents = self.noise_scheduler.step(
-                    noise_pred, t, latents, **extra_step_kwargs, return_dict=False
-                )[0]
+            # compute the previous noisy sample x_t -> x_t-1
+            latents = self.noise_scheduler.step(
+                noise_pred, t, latents, **extra_step_kwargs, return_dict=False
+            )[0]
 
         image = self.vae.decode(
             latents / self.vae.config.scaling_factor, return_dict=False
@@ -294,6 +295,23 @@ class LDM(nn.Module):
         # scale the initial noise by the standard deviation required by the scheduler
         latents = latents * self.noise_scheduler.init_noise_sigma
         return latents
+
+    def prepare_image_latents(self, image):
+
+        if image.shape[1] == 4:
+            image_latents = image
+        else:
+            image_latents = self.vae.encode(image).latent_dist.mode()
+
+        image_latents = torch.cat([image_latents], dim=0)
+
+        if self.do_classifier_free_guidance:
+            uncond_image_latents = torch.zeros_like(image_latents)
+            image_latents = torch.cat(
+                [image_latents, image_latents, uncond_image_latents], dim=0
+            )
+
+        return image_latents
 
     def prepare_extra_step_kwargs(self, generator, eta):
         # prepare extra kwargs for the scheduler step, since not all schedulers have the same signature
@@ -353,9 +371,9 @@ def main(cfg: TextualInversionConfig):
         * cfg.dataset.repeats
     )
     data_loader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True)
-
-    ldm = LDM(**asdict(cfg.diffusion)).to(device)
-    optimizer = torch.optim.AdamW(ldm.embedding_params, lr=cfg.learning_rate)
+    generator = torch.Generator(device).manual_seed(42)
+    ldm = LDM(**asdict(cfg.diffusion)).eval().to(device)
+    optimizer = torch.optim.AdamW(ldm.parameters(), lr=cfg.learning_rate)
 
     for epoch in range(cfg.epochs):
         print(f"epoch {epoch}:")
@@ -366,21 +384,27 @@ def main(cfg: TextualInversionConfig):
             image = image.to(device)
             image_edit = image_edit.to(device)
 
-            loss = ldm(image, image_edit, prompt)
+            loss = ldm(image, image_edit, prompt, generator=generator)
             print(f"batch {i} - loss: {loss.item()}")
             loss.backward()
             optimizer.step()
+
+            # grads = []
+            # for name, param in ldm.named_parameters():
+            #     if param.grad is not None:
+            #         grad = param.grad.view(-1)
+            #         grads.append({name: grad})
 
         # save embeddings
         epoch_output_dir = cfg.output_dir / str(epoch)
         epoch_output_dir.mkdir(exist_ok=True)
         ldm.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
+        embed_mean = list(ldm.embedding_manager.embedding_parameters())[0].mean()
+        print(f"embed-mean: {embed_mean}")
 
         # visualize samples
-        sample = ldm.sample(
-            image, prompt, guidance_scale=1, num_inference_steps=2, output_type="pt"
-        )
-        sample = torch.clamp(sample.detach().cpu(), -1., 1)
+        sample = ldm.sample(image, prompt, output_type="pt")
+        sample = torch.clamp(sample.detach().cpu(), -1.0, 1)
         grid = make_grid(sample, nrow=4)
         grid = (grid + 1.0) / 2.0
         grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
