@@ -21,7 +21,7 @@ from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
 from pytorch_lightning.utilities.rank_zero import rank_zero_only
-
+from torch.utils.checkpoint import checkpoint
 import pdb
 from ldm.util import log_txt_as_img, exists, default, ismap, isimage, mean_flat, count_params, instantiate_from_config
 from ldm.modules.ema import LitEma
@@ -30,6 +30,7 @@ from ldm.models.autoencoder import VQModelInterface, IdentityFirstStage, Autoenc
 from ldm.modules.diffusionmodules.util import make_beta_schedule, extract_into_tensor, noise_like
 from ldm.models.diffusion.ddim import DDIMSampler
 import einops
+
 
 class CFGDenoiser(nn.Module):
     def __init__(self, model):
@@ -755,17 +756,11 @@ class LatentDiffusion(DDPM):
         encoder_posterior_y = self.encode_first_stage(y)
         encoder_posterior_x = self.encode_first_stage(x)
         zx = self.get_first_stage_encoding(encoder_posterior_x).detach()
-        cond_key = cond_key or self.cond_stage_key
-        #pdb.set_trace()
+        cond_key = cond_key or self.cond_stage_key  #Caption here
         c = self.get_learned_conditioning(batch[cond_key])
         xc = {}
-        #xc = super().get_input(batch, cond_key)
         xc["c_crossattn"] = c[:bs]
-        #if not self.initialized:
-        #    self.parametersdiff[:] = xc["c_crossattn"][:1,:,:]
-        #    self.initialized = True
-        #else:
-        #xc["c_crossattn"] = self.parametersdiff.repeat(4,1,1)
+
         
         xc["c_concat"] = y[:bs]
         cond = {}
@@ -1080,7 +1075,10 @@ class LatentDiffusion(DDPM):
             x_recon = fold(o) / normalization
 
         else:
+            #pdb.set_trace()
+
             x_recon = self.model(x_noisy, t, **cond)
+
 
         if isinstance(x_recon, tuple) and not return_ids:
             return x_recon[0]
@@ -1121,6 +1119,7 @@ class LatentDiffusion(DDPM):
         else:
             raise NotImplementedError()
 
+        #pdb.set_trace()
         loss_simple = self.get_loss(model_output, target, mean=False).mean([1, 2, 3])
         loss_dict.update({f'{prefix}/loss_simple': loss_simple.mean()})
 
@@ -1144,7 +1143,9 @@ class LatentDiffusion(DDPM):
     def p_mean_variance(self, x, c, t, clip_denoised: bool, return_codebook_ids=False, quantize_denoised=False,
                         return_x0=False, score_corrector=None, corrector_kwargs=None):
         t_in = t
+
         model_out = self.apply_model(x, t_in, c, return_ids=return_codebook_ids)
+
 
         if score_corrector is not None:
             assert self.parameterization == "eps"
@@ -1154,7 +1155,7 @@ class LatentDiffusion(DDPM):
             model_out, logits = model_out
 
         if self.parameterization == "eps":
-            x_recon = self.predict_start_from_noise(x, t=t, noise=model_out)
+            x_recon = self.predict_start_from_noise(x, t, model_out)
         elif self.parameterization == "x0":
             x_recon = model_out
         else:
@@ -1172,16 +1173,20 @@ class LatentDiffusion(DDPM):
         else:
             return model_mean, posterior_variance, posterior_log_variance
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def p_sample(self, x, c, t, clip_denoised=False, repeat_noise=False,
                  return_codebook_ids=False, quantize_denoised=False, return_x0=False,
                  temperature=1., noise_dropout=0., score_corrector=None, corrector_kwargs=None):
         b, *_, device = *x.shape, x.device
+
+
         outputs = self.p_mean_variance(x=x, c=c, t=t, clip_denoised=clip_denoised,
                                        return_codebook_ids=return_codebook_ids,
                                        quantize_denoised=quantize_denoised,
                                        return_x0=return_x0,
                                        score_corrector=score_corrector, corrector_kwargs=corrector_kwargs)
+        
+
         if return_codebook_ids:
             raise DeprecationWarning("Support dropped.")
             model_mean, _, model_log_variance, logits = outputs
@@ -1190,11 +1195,14 @@ class LatentDiffusion(DDPM):
         else:
             model_mean, _, model_log_variance = outputs
 
+
         noise = noise_like(x.shape, device, repeat_noise) * temperature
         if noise_dropout > 0.:
             noise = torch.nn.functional.dropout(noise, p=noise_dropout)
         # no noise when t == 0
         nonzero_mask = (1 - (t == 0).float()).reshape(b, *((1,) * (len(x.shape) - 1)))
+
+
 
         if return_codebook_ids:
             return model_mean + nonzero_mask * (0.5 * model_log_variance).exp() * noise, logits.argmax(dim=1)
@@ -1259,7 +1267,12 @@ class LatentDiffusion(DDPM):
             if img_callback: img_callback(img, i)
         return img, intermediates
 
-    @torch.no_grad()
+    def monitor_memory(self, step):
+        allocated_mem = torch.cuda.memory_allocated(4)
+        reserved_mem = torch.cuda.memory_reserved(4)
+        print(f"Step {step}: Memory Allocated: {allocated_mem / (1024 * 1024)} MB, Memory Reserved: {reserved_mem / (1024 * 1024)} MB")
+
+    #@torch.no_grad()
     def p_sample_loop(self, cond, shape, return_intermediates=False,
                       x_T=None, verbose=True, callback=None, timesteps=None, quantize_denoised=False,
                       mask=None, x0=None, img_callback=None, start_T=None,
@@ -1278,6 +1291,8 @@ class LatentDiffusion(DDPM):
         if timesteps is None:
             timesteps = self.num_timesteps
 
+        timesteps = 700
+
         if start_T is not None:
             timesteps = min(timesteps, start_T)
         iterator = tqdm(reversed(range(0, timesteps)), desc='Sampling t', total=timesteps) if verbose else reversed(
@@ -1293,24 +1308,30 @@ class LatentDiffusion(DDPM):
                 assert self.model.conditioning_key != 'hybrid'
                 tc = self.cond_ids[ts].to(cond.device)
                 cond = self.q_sample(x_start=cond, t=tc, noise=torch.randn_like(cond))
+                pdb.set_trace()
 
-            img = self.p_sample(img, cond, ts,
-                                clip_denoised=self.clip_denoised,
-                                quantize_denoised=quantize_denoised)
+
+            img = checkpoint(self.p_sample,img, cond, ts,
+                                self.clip_denoised,
+                                quantize_denoised, use_reentrant=False)
+            
             if mask is not None:
                 img_orig = self.q_sample(x0, ts)
                 img = img_orig * mask + (1. - mask) * img
 
-            if i % log_every_t == 0 or i == timesteps - 1:
-                intermediates.append(img)
+            
+
+            #if i % log_every_t == 0 or i == timesteps - 1:
+            #    intermediates.append(img)
             if callback: callback(i)
             if img_callback: img_callback(img, i)
+            #pdb.set_trace()
 
         if return_intermediates:
             return img, intermediates
         return img
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def sample(self, cond, batch_size=16, return_intermediates=False, x_T=None,
                verbose=True, timesteps=None, quantize_denoised=False,
                mask=None, x0=None, shape=None,**kwargs):
@@ -1328,7 +1349,7 @@ class LatentDiffusion(DDPM):
                                   verbose=verbose, timesteps=timesteps, quantize_denoised=quantize_denoised,
                                   mask=mask, x0=x0)
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def sample_log(self,cond,batch_size,ddim, ddim_steps,**kwargs):
 
         if ddim:
@@ -1338,8 +1359,7 @@ class LatentDiffusion(DDPM):
                                                         shape,cond,verbose=False,**kwargs)
 
         else:
-            samples, intermediates = self.sample(cond=cond, batch_size=batch_size,
-                                                 return_intermediates=True,**kwargs)
+            samples, intermediates = self.sample(cond=cond, batch_size=batch_size, return_intermediates=True,**kwargs)
 
         return samples, intermediates
 
@@ -1409,6 +1429,7 @@ class LatentDiffusion(DDPM):
             
             uncond={}
             list_of_x = []
+            #pdb.set_trace()
             for i in range(c['c_crossattn'][0].shape[0]):
                 cur={}
                 cur['c_crossattn'] = [torch.unsqueeze(c['c_crossattn'][0][i],dim=0)]
