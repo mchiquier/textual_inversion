@@ -40,11 +40,11 @@ class AFHQ(torch.utils.data.Dataset):
         self.image_paths = os.listdir(folder_path)[:300]
         self.size = 256
         self.flip_p = 0.5
-        self.interpolation = {"linear": PIL.Image.LINEAR,
-                              "bilinear": PIL.Image.BILINEAR,
-                              "bicubic": PIL.Image.BICUBIC,
-                              "lanczos": PIL.Image.LANCZOS,
-                              }['bicubic']
+        # self.interpolation = {"linear": PIL.Image.LINEAR,
+        #                       "bilinear": PIL.Image.BILINEAR,
+        #                       "bicubic": PIL.Image.BICUBIC,
+        #                       "lanczos": PIL.Image.LANCZOS,
+        #                       }['bicubic']
 
     def __len__(self):
         return len(self.image_paths)
@@ -223,11 +223,11 @@ if __name__ == '__main__':
         os.mkdir("results_mag/cat_to_dog")
 
         
-    dataset = AFHQ(folder_path='/proj/vondrick4/datasets/data/afhq/train/cat', transform=transform)
+    dataset = AFHQ(folder_path='/proj/vondrick2/orr/projects/stargan-v2/data/afhq', transform=transform)
 
     batch_size = 32
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-    device = 6
+    device = 0
     
 
     '''

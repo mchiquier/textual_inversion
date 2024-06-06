@@ -1,13 +1,18 @@
 from typing import Optional, Union, Tuple, List, Callable, Dict
 import torch
 from PIL import Image
+from pathlib import Path
 from diffusers import StableDiffusionPipeline
 import numpy as np
 from magnification.prompt2prompt import ptp_utils
 from magnification.prompt2prompt.attention_controllers import (
+    LocalBlend,
+    AttentionReweight,
     AttentionReplace,
+    AttentionRefine,
     AttentionStore,
     EmptyControl,
+    get_equalizer,
 )
 
 LOW_RESOURCE = False
@@ -97,7 +102,13 @@ def show_self_attention_comp(
 
 
 def run_and_display(
-    model, prompts, controller, latent=None, run_baseline=False, generator=None
+    model,
+    prompts,
+    controller,
+    latent=None,
+    run_baseline=False,
+    generator=None,
+    save_path=None,
 ):
     if run_baseline:
         print("w.o. prompt-to-prompt")
@@ -109,6 +120,7 @@ def run_and_display(
             generator=generator,
         )
         print("with prompt-to-prompt")
+    # x_t is the input latent noise (i.e, x_T)
     images, x_t = ptp_utils.text2image_ldm_stable(
         model,
         prompts,
@@ -119,12 +131,18 @@ def run_and_display(
         generator=generator,
         low_resource=LOW_RESOURCE,
     )
-    ptp_utils.view_images(images)
+    ptp_utils.view_images(images, save_path=save_path)
     return images, x_t
 
 
 def main():
-    device_id = 4
+    device_id = 0
+    save_dir = Path(
+        "/proj/vondrick2/orr/projects/textual_inversion/magnification/prompt2prompt/results"
+    )
+    save_dir.mkdir(exist_ok=True, parents=True)
+    save_path = save_dir / "smiling_cat.png"
+
     device = (
         torch.device(f"cuda:{device_id}")
         if torch.cuda.is_available()
@@ -136,10 +154,9 @@ def main():
     tokenizer = ldm_stable.tokenizer
 
     g_cpu = torch.Generator().manual_seed(8888)
-    prompts = [
-        "A painting of a squirrel eating a burger",
-        "A painting of a lion eating a burger",
-    ]
+    prompts = ["a photo of a smiling cat"]*2
+
+    # just to get the latent x_t with a fixed seed
     controller = AttentionStore()
     image, x_t = run_and_display(
         model=ldm_stable,
@@ -149,20 +166,47 @@ def main():
         run_baseline=False,
         generator=g_cpu,
     )
-    controller = AttentionReplace(
+
+    # pay more attention to some word
+    equalizer = get_equalizer(prompts[1], ("smiling",), (5,), tokenizer)
+    lb = LocalBlend(prompts, ("cat", "cat"), tokenizer, device)
+    # lb = None
+    # controller = AttentionReplace(
+    #     prompts=prompts,
+    #     num_steps=NUM_DIFFUSION_STEPS,
+    #     tokenizer=tokenizer,
+    #     local_blend=lb,
+    #     cross_replace_steps=0.8,
+    #     self_replace_steps=0.4,
+    #     device=device,
+    # )
+    controller = AttentionReweight(
         prompts=prompts,
         num_steps=NUM_DIFFUSION_STEPS,
         tokenizer=tokenizer,
         cross_replace_steps=0.8,
         self_replace_steps=0.4,
+        local_blend=lb,
+        equalizer=equalizer,
         device=device
     )
+    # controller = AttentionRefine(
+    #     prompts=prompts,
+    #     num_steps=NUM_DIFFUSION_STEPS,
+    #     local_blend=lb,
+    #     cross_replace_steps=0.8,
+    #     self_replace_steps=0.4,
+    #     tokenizer=tokenizer,
+    #     device=device,
+    # )
+
     _ = run_and_display(
         model=ldm_stable,
         prompts=prompts,
         controller=controller,
         latent=x_t,
         run_baseline=False,
+        save_path=save_path,
     )
 
 
