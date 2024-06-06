@@ -6,6 +6,7 @@ from PIL import Image
 from pathlib import Path
 from dataclasses import asdict
 from torchvision import transforms
+from torchvision.utils import make_grid
 from typing import Optional, Union
 from torch.utils.data import DataLoader, ConcatDataset
 from magnification.datasets import TextualInversionEdits
@@ -23,13 +24,12 @@ from diffusers import (
 import torch.nn as nn
 import torch.nn.functional as F
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 class LDM(nn.Module):
     def __init__(
-        self,
-        embedding_config: EmbeddingManagerConfig,
-        conditioning_dropout_prob: float
+        self, embedding_config: EmbeddingManagerConfig, conditioning_dropout_prob: float
     ) -> None:
         super().__init__()
         self.conditioning_dropout_prob = conditioning_dropout_prob
@@ -65,7 +65,7 @@ class LDM(nn.Module):
         latents = latents * self.vae.config.scaling_factor
 
         # Get the text embedding for conditioning.
-        encoder_hidden_states = self.text_encoder(prompt)
+        prompt_embeds = self.text_encoder(prompt)
 
         # Get the additional image embedding for conditioning.
         # Instead of getting a diagonal Gaussian here, we simply take the mode.
@@ -130,10 +130,10 @@ class LDM(nn.Module):
         model_pred = self.unet(
             concatenated_noisy_latents,
             timesteps,
-            encoder_hidden_states,
+            prompt_embeds,
             return_dict=False,
         )[0]
-        # TODO: fancy loss with vlb
+
         loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
         return loss
 
@@ -149,6 +149,7 @@ class LDM(nn.Module):
         prompt_embeds: Optional[torch.FloatTensor] = None,
         latents: Optional[torch.FloatTensor] = None,
         generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
+        output_type: Optional[str] = "pil",
     ):
         self._guidance_scale = guidance_scale
         self._image_guidance_scale = image_guidance_scale
@@ -259,7 +260,7 @@ class LDM(nn.Module):
             latents / self.vae.config.scaling_factor, return_dict=False
         )[0]
 
-        image = self.pipe.image_processor.postprocess(image, output_type="pil")
+        image = self.pipe.image_processor.postprocess(image, output_type=output_type)
         return image
 
     def prepare_latents(
@@ -346,7 +347,7 @@ def main(cfg: TextualInversionConfig):
                 cfg.dataset.image_dir,
                 cfg.dataset.image_edits_dir,
                 cfg.diffusion.embedding_config.placeholder_strings,
-                transform=transform
+                transform=transform,
             )
         ]
         * cfg.dataset.repeats
@@ -356,10 +357,9 @@ def main(cfg: TextualInversionConfig):
     ldm = LDM(**asdict(cfg.diffusion)).to(device)
     optimizer = torch.optim.AdamW(ldm.embedding_params, lr=cfg.learning_rate)
 
-    grads = []
     for epoch in range(cfg.epochs):
         print(f"epoch {epoch}:")
-        for batch in data_loader:
+        for i, batch in enumerate(data_loader):
             optimizer.zero_grad()
 
             image, image_edit, prompt = batch
@@ -367,25 +367,28 @@ def main(cfg: TextualInversionConfig):
             image_edit = image_edit.to(device)
 
             loss = ldm(image, image_edit, prompt)
-            print(f"loss: {loss.item()}")
+            print(f"batch {i} - loss: {loss.item()}")
             loss.backward()
             optimizer.step()
 
-            # for name, param in ldm.named_parameters():
-            #     grad = None
-            #     if param.grad is not None:
-            #         grad = param.grad.view(-1)
-            #     grads.append({name: grad})
-            # print(grads)
+        # save embeddings
+        epoch_output_dir = cfg.output_dir / str(epoch)
+        epoch_output_dir.mkdir(exist_ok=True)
+        ldm.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
 
-    for batch in data_loader:
-        image, _, prompt = batch
-        image = image.to(device)
-        sample = ldm.sample(image, prompt, guidance_scale=1, num_inference_steps=2)
-
-        pil_img = sample[0]
-        pil_img.save("output.png")
-        break
+        # visualize samples
+        sample = ldm.sample(
+            image, prompt, guidance_scale=1, num_inference_steps=2, output_type="pt"
+        )
+        sample = torch.clamp(sample.detach().cpu(), -1., 1)
+        grid = make_grid(sample, nrow=4)
+        grid = (grid + 1.0) / 2.0
+        grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
+        grid = grid.numpy()
+        grid = (grid * 255).astype(np.uint8)
+        im = Image.fromarray(grid)
+        filename = f"{loss.item()}_train.jpg"
+        im.save(epoch_output_dir / filename)
 
 
 if __name__ == "__main__":

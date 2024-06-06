@@ -34,3 +34,8 @@ class TextualInversionConfig:
     epochs: int
     learning_rate: float
     device: int
+    output_dir: Path
+
+    def __post_init__(self):
+        self.output_dir.mkdir(exist_ok=True, parents=True)
+
