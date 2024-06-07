@@ -34,8 +34,7 @@ class LDM(nn.Module):
         self.pipe = StableDiffusionInstructPix2PixPipeline.from_pretrained(
             model_id, safety_checker=None
         )
-        self.noise_scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
-        # self.noise_scheduler = EulerAncestralDiscreteScheduler.from_config(self.pipe.scheduler.config)
+        self.noise_scheduler = EulerAncestralDiscreteScheduler.from_config(self.pipe.scheduler.config)
         self.text_encoder = FrozenCLIPEncoder().requires_grad_(False)
         self.vae = self.pipe.vae.requires_grad_(False)
         self.unet = self.pipe.unet.requires_grad_(False)
@@ -80,7 +79,8 @@ class LDM(nn.Module):
         # Add noise to the latents according to the noise magnitude at each timestep
         # (this is the forward diffusion process)
         # In DDIM and DDPM it similar to q_sample implementation of the original diffusion repo
-        noisy_latents = self.noise_scheduler.add_noise(latents, noise, timesteps)
+        noise_scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
+        noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)
 
         if self.conditioning_dropout_prob is not None:
             random_p = torch.rand(bsz, device=latents.device, generator=generator)
@@ -111,9 +111,9 @@ class LDM(nn.Module):
         )
 
         # Get the target for loss depending on the prediction type
-        if self.noise_scheduler.config.prediction_type == "epsilon":
+        if noise_scheduler.config.prediction_type == "epsilon":
             target = noise
-        elif self.noise_scheduler.config.prediction_type == "v_prediction":
+        elif noise_scheduler.config.prediction_type == "v_prediction":
             target = self.noise_scheduler.get_velocity(latents, noise, timesteps)
         else:
             raise ValueError(
@@ -379,7 +379,8 @@ def main(cfg: TextualInversionConfig):
     )
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.batch_size)
 
-    generator = torch.Generator(device).manual_seed(42)
+    # generator = torch.Generator(device).manual_seed(0)
+    generator = None
     ldm = LDM(**asdict(cfg.diffusion)).eval().to(device)
     optimizer = torch.optim.AdamW(ldm.parameters(), lr=cfg.learning_rate)
 
@@ -421,20 +422,20 @@ def main(cfg: TextualInversionConfig):
         train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
         plot_grid(sample, train_batch_save_path)
 
-    # eval loop
-    for batch in eval_data_loader:
-        image, prompt = batch
-        image = image.to(device)
-        sample = ldm.sample(
-            image,
-            prompt,
-            output_type="pt",
-            num_inference_steps=cfg.num_inference_steps,
-            generator=generator,
-        )
-        eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
-        plot_grid(sample, eval_batch_save_path)
-        break
+        # eval loop
+        for batch in eval_data_loader:
+            image, prompt = batch
+            image = image.to(device)
+            sample = ldm.sample(
+                image,
+                prompt,
+                output_type="pt",
+                num_inference_steps=cfg.num_inference_steps,
+                generator=generator,
+            )
+            eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
+            plot_grid(sample, eval_batch_save_path)
+            break
 
 
 if __name__ == "__main__":
