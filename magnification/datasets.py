@@ -105,9 +105,32 @@ class TextualInversionEdits(ImageEdits):
         if self.transform:
             images = self.transform(images)
 
+        images = images / 255.0
         image, image_edit = images.chunk(2)
-        image = image / 127.5 - 1.0
-        image_edit = image_edit / 127.5 - 1.0
         # TODO: support multiple placeholder strings
         prompt = self.placeholder_str[0]
         return image, image_edit, prompt
+
+
+class TextualInversionEval(TextualInversionEdits):
+    def __init__(
+        self,
+        images_dir: Path,
+        placeholder_str: list[str],
+        edits_dir: Path = None,
+        transform=None,
+    ) -> None:
+        super().__init__(images_dir, edits_dir, placeholder_str, transform)
+
+    def __getitem__(self, idx):
+        img_path = self.image_list[idx]
+        image = self.convert_to_np(img_path)
+        image = torch.tensor(image)
+
+        if self.transform:
+            image = self.transform(image)
+
+        image = image / 255.0
+        # TODO: support multiple placeholder strings
+        prompt = self.placeholder_str[0]
+        return image, prompt

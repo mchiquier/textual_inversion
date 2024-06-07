@@ -16,6 +16,7 @@ class EmbeddingManagerConfig:
 class DatasetConfig:
     image_dir: Path
     image_edits_dir: Path
+    eval_dir: Path
     repeats: int
     img_size: Optional[int] = 256
 

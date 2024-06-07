@@ -2,14 +2,12 @@ import torch
 import inspect
 import pyrallis
 from tqdm import tqdm
-from PIL import Image
-from pathlib import Path
 from dataclasses import asdict
 from torchvision import transforms
-from torchvision.utils import make_grid
 from typing import Optional, Union
 from torch.utils.data import DataLoader, ConcatDataset
-from magnification.datasets import TextualInversionEdits
+from magnification.utils.viz import plot_grid
+from magnification.datasets import TextualInversionEdits, TextualInversionEval
 from ldm.modules.embedding_manager import EmbeddingManager
 from ldm.modules.encoders.modules import FrozenCLIPEncoder
 from magnification.textual_inversion_config import (
@@ -23,10 +21,6 @@ from diffusers import (
 )
 import torch.nn as nn
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import numpy as np
-
-from ldm.util import instantiate_from_config
 
 
 class LDM(nn.Module):
@@ -57,7 +51,7 @@ class LDM(nn.Module):
         prompt: Union[str, list[str]] = None,
         generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     ):
-        # edited_image = self.pipe.image_processor.preprocess(edited_image)
+        edited_image = self.pipe.image_processor.preprocess(edited_image)
         latents = self.vae.encode(edited_image).latent_dist.sample()
         latents = latents * self.vae.config.scaling_factor
 
@@ -68,7 +62,7 @@ class LDM(nn.Module):
 
         # Get the additional image embedding for conditioning.
         # Instead of getting a diagonal Gaussian here, we simply take the mode.
-        # image = self.pipe.image_processor.preprocess(image)
+        image = self.pipe.image_processor.preprocess(image)
         original_image_embeds = self.vae.encode(image).latent_dist.mode()
 
         # Sample noise that we'll add to the latents
@@ -172,13 +166,13 @@ class LDM(nn.Module):
         )
         if self.do_classifier_free_guidance:
             uncond_tokens = [""] * batch_size
-            uncond_embeds = self.text_encoder.encode(uncond_tokens, embedding_manager=self.embedding_manager)
-            prompt_embeds = torch.cat(
-                [prompt_embeds, uncond_embeds, uncond_embeds]
+            uncond_embeds = self.text_encoder.encode(
+                uncond_tokens, embedding_manager=self.embedding_manager
             )
+            prompt_embeds = torch.cat([prompt_embeds, uncond_embeds, uncond_embeds])
 
         # 3. Preprocess image
-        # image = self.pipe.image_processor.preprocess(image)
+        image = self.pipe.image_processor.preprocess(image)
 
         # 4. set timesteps
         self.noise_scheduler.set_timesteps(num_inference_steps)
@@ -363,7 +357,7 @@ class LDM(nn.Module):
 def main(cfg: TextualInversionConfig):
     device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
 
-    transform = transform = transforms.Compose(
+    transform = transforms.Compose(
         [transforms.Resize(cfg.dataset.img_size), transforms.RandomHorizontalFlip()]
     )
     dataset = ConcatDataset(
@@ -378,6 +372,13 @@ def main(cfg: TextualInversionConfig):
         * cfg.dataset.repeats
     )
     data_loader = DataLoader(dataset, batch_size=cfg.batch_size, shuffle=True)
+    eval_dataset = TextualInversionEval(
+        cfg.dataset.eval_dir,
+        cfg.diffusion.embedding_config.placeholder_strings,
+        transform=transform,
+    )
+    eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.batch_size)
+
     generator = torch.Generator(device).manual_seed(42)
     ldm = LDM(**asdict(cfg.diffusion)).eval().to(device)
     optimizer = torch.optim.AdamW(ldm.parameters(), lr=cfg.learning_rate)
@@ -396,33 +397,44 @@ def main(cfg: TextualInversionConfig):
             loss.backward()
             optimizer.step()
 
-            # grads = []
-            # for name, param in ldm.named_parameters():
-            #     if param.grad is not None:
-            #         grad = param.grad.view(-1)
-            #         grads.append({name: grad})
-
         # save embeddings
         epoch_output_dir = cfg.output_dir / str(epoch)
         epoch_output_dir.mkdir(exist_ok=True)
         ldm.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
         embed_mean = list(ldm.embedding_manager.embedding_parameters())[0].mean()
+        grads = [
+            (name, param.grad.shape)
+            for name, param in ldm.named_parameters()
+            if param.grad is not None
+        ]
+        print(f"learned params: {grads}")
         print(f"embed-mean: {embed_mean}")
 
         # visualize samples
         sample = ldm.sample(
-            image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps, eta=1.
+            image,
+            prompt,
+            output_type="pt",
+            num_inference_steps=cfg.num_inference_steps,
+            generator=generator,
         )
-        sample = sample.detach().cpu()
-        # sample = torch.clamp(sample.detach().cpu(), -1.0, 1)
-        grid = make_grid(sample, nrow=4)
-        grid = (grid + 1.0) / 2.0
-        grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
-        grid = grid.numpy()
-        grid = (grid * 255).astype(np.uint8)
-        im = Image.fromarray(grid)
-        filename = f"{loss.item()}_train.jpg"
-        im.save(epoch_output_dir / filename)
+        train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
+        plot_grid(sample, train_batch_save_path)
+
+    # eval loop
+    for batch in eval_data_loader:
+        image, prompt = batch
+        image = image.to(device)
+        sample = ldm.sample(
+            image,
+            prompt,
+            output_type="pt",
+            num_inference_steps=cfg.num_inference_steps,
+            generator=generator,
+        )
+        eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
+        plot_grid(sample, eval_batch_save_path)
+        break
 
 
 if __name__ == "__main__":
