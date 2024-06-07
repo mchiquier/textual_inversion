@@ -1,0 +1,21 @@
+dataset:
+  image_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/train-a
+  image_edits_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/train-b
+  eval_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/eval-a
+  repeats: 100
+
+diffusion:
+  embedding_config:
+    placeholder_strings: ["*"]
+    initializer_words: ["red", "whiskers"]
+    per_image_tokens: false
+    num_vectors_per_token: 10
+    progressive_words: false
+  conditioning_dropout_prob: 0.05
+
+batch_size: 16
+learning_rate: 0.08
+epochs: 6
+device: 6
+output_dir: ./results/whiskers_diffusers/euler_200_lr0.08
+num_inference_steps: 200
