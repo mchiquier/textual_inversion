@@ -1,10 +1,15 @@
 import inspect
+import random
 import torch
+import torch.utils.checkpoint as checkpoint
 from diffusers import (
     DDIMScheduler,
     EulerAncestralDiscreteScheduler,
     StableDiffusionInstructPix2PixPipeline,
 )
+from diffusers.loaders import AttnProcsLayers
+from diffusers.models.attention_processor import LoRAAttnProcessor
+from peft import get_peft_model, LoraConfig
 from tqdm import tqdm
 from typing import Optional, Union
 
@@ -42,7 +47,7 @@ class InstructInversion(nn.Module):
         self,
         image: torch.Tensor,
         edited_image: torch.Tensor,
-        prompt: Union[str, list[str]] = None,
+        prompt: Union[str, list[str]],
         generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     ):
         edited_image = self.pipe.image_processor.preprocess(edited_image)
@@ -346,3 +351,183 @@ class InstructInversion(nn.Module):
         # of the Imagen paper: https://arxiv.org/pdf/2205.11487.pdf . `guidance_scale = 1`
         # corresponds to doing no classifier free guidance.
         return self.guidance_scale > 1.0 and self.image_guidance_scale >= 1.0
+
+
+class InstructInversionBPTT(InstructInversion):
+    def __init__(
+        self, embedding_config: EmbeddingManagerConfig, conditioning_dropout_prob: float
+    ) -> None:
+        super().__init__(embedding_config, conditioning_dropout_prob)
+        self.noise_scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
+
+    def set_lora_layers(self):
+        lora_attn_procs = {}
+        for name in self.unet.attn_processors.keys():
+            cross_attention_dim = (
+                None
+                if name.endswith("attn1.processor")
+                else self.unet.config.cross_attention_dim
+            )
+            if name.startswith("mid_block"):
+                hidden_size = self.unet.config.block_out_channels[-1]
+            elif name.startswith("up_blocks"):
+                block_id = int(name[len("up_blocks.")])
+                hidden_size = list(reversed(self.unet.config.block_out_channels))[
+                    block_id
+                ]
+            elif name.startswith("down_blocks"):
+                block_id = int(name[len("down_blocks.")])
+                hidden_size = self.unet.config.block_out_channels[block_id]
+
+            lora_attn_procs[name] = LoRAAttnProcessor(
+                hidden_size=hidden_size, cross_attention_dim=cross_attention_dim
+            )
+        self.unet.set_attn_processor(lora_attn_procs)
+        self.set_unet_wrapper()
+
+    def set_unet_wrapper(self):
+        self.unet = _Wrapper(self.unet, self.unet.attn_processors)
+
+    def set_peft_unet(self):
+        peft_config = LoraConfig(r=4, target_modules="all-linear")
+        self.unet = get_peft_model(self.unet, peft_config)
+        self.unet.print_trainable_parameters()
+
+    def forward(
+        self,
+        image: torch.Tensor,
+        edited_image: torch.Tensor,
+        prompt: Union[str, list[str]],
+        num_inference_steps: int = 100,
+        guidance_scale: float = 7.5,
+        image_guidance_scale: float = 1.5,
+        eta: float = 0.0,
+        grad_checkpoint: bool = True,
+        truncated_backprop: bool = False,
+        truncated_backprop_rand: bool = False,
+        truncated_backprop_minmax: tuple = (35, 45),
+        trunc_backprop_timestep: int = 100,
+        inference_dtype: torch.dtype = torch.float16,
+        generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
+    ):
+        self._guidance_scale = guidance_scale
+        self._image_guidance_scale = image_guidance_scale
+
+        edited_image = self.pipe.image_processor.preprocess(edited_image)
+        edited_latents = self.vae.encode(edited_image).latent_dist.sample()
+        edited_latents = edited_latents * self.vae.config.scaling_factor
+
+        if prompt is not None and isinstance(prompt, str):
+            batch_size = 1
+        elif prompt is not None and (
+            isinstance(prompt, list) or isinstance(prompt, tuple)
+        ):
+            batch_size = len(prompt)
+
+        # Encode input prompt
+        prompt_embeds = self.text_encoder.encode(
+            prompt, embedding_manager=self.embedding_manager
+        )
+        if self.do_classifier_free_guidance:
+            uncond_tokens = [""] * batch_size
+            uncond_embeds = self.text_encoder.encode(
+                uncond_tokens, embedding_manager=self.embedding_manager
+            )
+            prompt_embeds = torch.cat([prompt_embeds, uncond_embeds, uncond_embeds])
+
+        # Get the additional image embedding for conditioning.
+        # Instead of getting a diagonal Gaussian here, we simply take the mode.
+        image = self.pipe.image_processor.preprocess(image)
+        image_latents = self.prepare_image_latents(image)
+
+        height, width = image_latents.shape[-2:]
+        height = height * self.vae.config.scaling_factor
+        width = width * self.vae.config.scaling_factor
+
+        # Prepare latent variables
+        num_channels_latents = self.vae.config.latent_channels
+        latents = self.prepare_latents(
+            batch_size,
+            num_channels_latents,
+            height,
+            width,
+            prompt_embeds.dtype,
+            image_latents.device,
+            generator,
+        )
+
+        # Prepare extra step kwargs.
+        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
+
+        # Set timesteps
+        self.noise_scheduler.set_timesteps(num_inference_steps)
+        timesteps = self.noise_scheduler.timesteps
+        self._num_timesteps = len(timesteps)
+
+        for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
+            t = torch.tensor([t], dtype=inference_dtype, device=latents.device)
+            # t = t.repeat(batch_size)
+
+            # Expand the latents if we are doing classifier free guidance.
+            # The latents are expanded 3 times because for pix2pix the guidance\
+            # is applied for both the text and the input image.
+            latent_model_input = (
+                torch.cat([latents] * 3)
+                if self.do_classifier_free_guidance
+                else latents
+            )
+
+            # concat latents, image_latents in the channel dimension
+            scaled_latent_model_input = self.noise_scheduler.scale_model_input(
+                latent_model_input, t
+            )
+            scaled_latent_model_input = torch.cat([scaled_latent_model_input, image_latents], dim=1)
+
+            if grad_checkpoint:
+                noise_pred = checkpoint.checkpoint(
+                    self.unet, scaled_latent_model_input, t, prompt_embeds, use_reentrant=False
+                ).sample
+            else:
+                noise_pred = self.unet(scaled_latent_model_input, t, prompt_embeds).sample
+
+            if truncated_backprop:
+                if truncated_backprop_rand:
+                    timestep = random.randint(
+                        truncated_backprop_minmax[0],
+                        truncated_backprop_minmax[1],
+                    )
+                    if i < timestep:
+                        noise_pred = noise_pred.detach()
+                else:
+                    if i < trunc_backprop_timestep:
+                        noise_pred = noise_pred.detach()
+
+            # perform guidance
+            if self.do_classifier_free_guidance:
+                noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(
+                    3
+                )
+                noise_pred = (
+                    noise_pred_uncond
+                    + self.guidance_scale * (noise_pred_text - noise_pred_image)
+                    + self.image_guidance_scale * (noise_pred_image - noise_pred_uncond)
+                )
+
+            latents = self.noise_scheduler.step(
+                noise_pred, t[0].long(), latents, **extra_step_kwargs
+            ).prev_sample
+
+        loss = F.mse_loss(latents.float(), edited_latents.float(), reduction="mean")
+        return loss
+
+
+class _Wrapper(AttnProcsLayers):
+    # this is a hack to synchronize gradients properly. the module that registers the parameters we care about (in
+    # this case, AttnProcsLayers) needs to also be used for the forward pass. AttnProcsLayers doesn't have a
+    # `forward` method, so we wrap it to add one and capture the rest of the unet parameters using a closure.
+    def __init__(self, model, state_dict: torch.Dict[str, torch.Tensor]):
+        super().__init__(state_dict)
+        self.model = model
+
+    def forward(self, *args, **kwargs):
+        return self.model(*args, **kwargs)
