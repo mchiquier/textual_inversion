@@ -18,7 +18,7 @@ class DatasetConfig:
     image_dir: Path
     image_edits_dir: Path
     eval_dir: Path
-    repeats: int
+    repeats: Optional[int] = 1
     img_size: Optional[int] = 256
 
 
@@ -112,3 +112,18 @@ class InstructInversionBPTTConfig:
 
     def __post_init__(self):
         self.log_dir.mkdir(exist_ok=True, parents=True)
+
+
+@dataclass
+class EvalConfig:
+    diffusion: LDMConfig
+    dataset: DatasetConfig
+    ckpt_path: Path
+    output_dir: Path
+    run_name: str
+    batch_size: int
+    num_inference_steps: int
+    device: int
+
+    def __post_init__(self):
+        self.output_dir.mkdir(exist_ok=True, parents=True)

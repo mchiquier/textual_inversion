@@ -5,9 +5,9 @@ from torchvision.utils import make_grid
 import numpy as np
 
 
-def plot_grid(sample: torch.Tensor, save_path: Path):
+def plot_grid(sample: torch.Tensor, save_path: Path, nrow: int = 4):
     sample = sample.detach().cpu()
-    grid = make_grid(sample, nrow=4)
+    grid = make_grid(sample, nrow=nrow)
     grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
     grid = grid.numpy()
     grid = (grid * 255).astype(np.uint8)
