@@ -388,8 +388,25 @@ class InstructInversionBPTT(InstructInversion):
     def set_unet_wrapper(self):
         self.unet = _Wrapper(self.unet, self.unet.attn_processors)
 
+    def find_all_linear_names(self):
+        lora_module_names = set()
+        for name, module in self.unet.named_modules():
+            if isinstance(module, nn.Linear):
+                names = name.split(".")
+                linear_name = names[-1]
+                if len(names) == 1:
+                    linear_name = names[0]
+                # if str(linear_name).isdigit():
+                if str(linear_name).isdigit() or "emb" in linear_name:
+                    continue
+
+                lora_module_names.add(linear_name)
+
+        return list(lora_module_names)
+
     def set_peft_unet(self):
-        peft_config = LoraConfig(r=4, target_modules="all-linear")
+        lora_module_names = self.find_all_linear_names()
+        peft_config = LoraConfig(r=4, target_modules=lora_module_names)
         self.unet = get_peft_model(self.unet, peft_config)
         self.unet.print_trainable_parameters()
 
@@ -405,9 +422,8 @@ class InstructInversionBPTT(InstructInversion):
         grad_checkpoint: bool = True,
         truncated_backprop: bool = False,
         truncated_backprop_rand: bool = False,
-        truncated_backprop_minmax: tuple = (35, 45),
+        truncated_backprop_minmax: Union[tuple, list] = (35, 45),
         trunc_backprop_timestep: int = 100,
-        inference_dtype: torch.dtype = torch.float16,
         generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     ):
         self._guidance_scale = guidance_scale
@@ -465,7 +481,7 @@ class InstructInversionBPTT(InstructInversion):
         self._num_timesteps = len(timesteps)
 
         for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
-            t = torch.tensor([t], dtype=inference_dtype, device=latents.device)
+            t = torch.tensor([t], device=latents.device)
             # t = t.repeat(batch_size)
 
             # Expand the latents if we are doing classifier free guidance.
@@ -481,14 +497,22 @@ class InstructInversionBPTT(InstructInversion):
             scaled_latent_model_input = self.noise_scheduler.scale_model_input(
                 latent_model_input, t
             )
-            scaled_latent_model_input = torch.cat([scaled_latent_model_input, image_latents], dim=1)
+            scaled_latent_model_input = torch.cat(
+                [scaled_latent_model_input, image_latents], dim=1
+            )
 
             if grad_checkpoint:
                 noise_pred = checkpoint.checkpoint(
-                    self.unet, scaled_latent_model_input, t, prompt_embeds, use_reentrant=False
+                    self.unet,
+                    scaled_latent_model_input,
+                    t,
+                    prompt_embeds,
+                    use_reentrant=False,
                 ).sample
             else:
-                noise_pred = self.unet(scaled_latent_model_input, t, prompt_embeds).sample
+                noise_pred = self.unet(
+                    scaled_latent_model_input, t, prompt_embeds
+                ).sample
 
             if truncated_backprop:
                 if truncated_backprop_rand:
@@ -518,6 +542,15 @@ class InstructInversionBPTT(InstructInversion):
             ).prev_sample
 
         loss = F.mse_loss(latents.float(), edited_latents.float(), reduction="mean")
+        
+        # output_image = self.vae.decode(
+        #     latents / self.vae.config.scaling_factor, return_dict=False
+        # )[0]
+        # output_image = self.pipe.image_processor.postprocess(
+        #     output_image, output_type="pt"
+        # )
+
+        # loss = F.mse_loss(output_image, edited_image, reduction="mean")
         return loss
 
 

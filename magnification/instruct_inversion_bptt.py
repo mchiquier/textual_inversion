@@ -15,7 +15,6 @@ from magnification.models.instruct_inversion import InstructInversionBPTT
 
 @pyrallis.wrap()
 def main(cfg: InstructInversionBPTTConfig):
-    device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
 
     transform = transforms.Compose(
         [transforms.Resize(cfg.dataset.img_size), transforms.RandomHorizontalFlip()]
@@ -50,9 +49,10 @@ def main(cfg: InstructInversionBPTTConfig):
     accelerator = Accelerator(
         log_with="wandb",
         mixed_precision=cfg.mixed_precision,
-        project_config=accelerator_config,
-        gradient_accumulation_steps=cfg.train.gradient_accumulation_steps,
+        project_config=accelerator_config
     )
+    device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
+    # device = accelerator.device
 
     if accelerator.is_main_process:
         wandb_args = {}
@@ -89,9 +89,6 @@ def main(cfg: InstructInversionBPTTConfig):
         inference_dtype = torch.bfloat16
 
     # Move unet, vae and text_encoder to device and cast to inference_dtype
-    # pipeline.vae.to(accelerator.device, dtype=inference_dtype)
-    # pipeline.text_encoder.to(accelerator.device, dtype=inference_dtype)
-    # pipeline.unet.to(accelerator.device, dtype=inference_dtype)
     pipeline.vae.to(device, dtype=inference_dtype)
     pipeline.text_encoder.to(device, dtype=inference_dtype)
     pipeline.unet.to(device, dtype=inference_dtype)
@@ -100,18 +97,23 @@ def main(cfg: InstructInversionBPTTConfig):
     if cfg.train.use_lora:
         pipeline.set_peft_unet()
 
-    # Initialize the optimizer
-    embedding_params = list(pipeline.embedding_manager.embedding_parameters())
-    optimizer = torch.optim.AdamW(embedding_params, lr=cfg.train.learning_rate)
+    pipeline.unet.requires_grad_(True)
+    pipeline.unet.train()
 
+    # Initialize the optimizer
+    optimizer = torch.optim.AdamW(pipeline.parameters(), lr=cfg.train.learning_rate)
+
+    # pipeline, optimizer, data_loader, eval_data_loader = accelerator.prepare(
+    #     pipeline, optimizer, data_loader, eval_data_loader
+    # )
     for epoch in range(cfg.epochs):
         print(f"epoch {epoch}:")
         for i, batch in enumerate(data_loader):
             optimizer.zero_grad()
 
             image, image_edit, prompt = batch
-            image = image.to(device).half()
-            image_edit = image_edit.to(device).half()
+            image = image.to(device)
+            image_edit = image_edit.to(device)
 
             loss = pipeline(
                 image=image,
@@ -119,9 +121,13 @@ def main(cfg: InstructInversionBPTTConfig):
                 prompt=prompt,
                 num_inference_steps=cfg.num_inference_steps,
                 grad_checkpoint=cfg.train.grad_checkpoint,
+                truncated_backprop=cfg.train.truncated_backprop,
+                truncated_backprop_rand=cfg.train.truncated_backprop_rand,
+                truncated_backprop_minmax=cfg.train.truncated_backprop_minmax
             )
             print(f"batch {i} - loss: {loss.item()}")
-            loss.backward(loss)
+            loss.backward()
+            # accelerator.backward(loss)
             optimizer.step()
 
         # save embeddings
@@ -134,7 +140,7 @@ def main(cfg: InstructInversionBPTTConfig):
             for name, param in pipeline.named_parameters()
             if param.grad is not None
         ]
-        print(f"learned params: {grads}")
+        print(f"number of learned params: {len(grads)}")
         print(f"embed-mean: {embed_mean}")
 
         # visualize samples
@@ -148,7 +154,7 @@ def main(cfg: InstructInversionBPTTConfig):
         print("evaluation")
         for batch in eval_data_loader:
             image, prompt = batch
-            image = image.to(device).half()
+            image = image.to(device)
             sample = pipeline.sample(
                 image,
                 prompt,

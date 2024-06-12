@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import Optional, Union
 from pathlib import Path
 from dataclasses import dataclass
 
@@ -52,6 +52,8 @@ class BPTTConfig:
     # flags
     use_lora: bool
     grad_checkpoint: bool
+    truncated_backprop: bool
+    truncated_backprop_rand: bool
 
     total_batch_size: int
     total_samples_per_epoch: int
@@ -69,6 +71,8 @@ class BPTTConfig:
     gradient_accumulation_steps: Optional[int] = 32
     data_loader_iterations: Optional[int] = 32
     per_gpu_capacity: Optional[int] = 1
+
+    truncated_backprop_minmax: Union[tuple, list] = (35, 45)
 
     def __post_init__(self):
         self.samples_per_epoch_per_gpu = self.total_samples_per_epoch // self.num_gpus
