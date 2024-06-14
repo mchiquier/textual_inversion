@@ -47,13 +47,13 @@ class TextualInversionConfig:
 class BPTTConfig:
     # based on AlignProp config.train
     # optimizer
-    learning_rate: float
+    lr_text_embed: float
+    lr_lora: float
 
     # flags
     use_lora: bool
     grad_checkpoint: bool
     truncated_backprop: bool
-    truncated_backprop_rand: bool
 
     total_batch_size: int
     total_samples_per_epoch: int

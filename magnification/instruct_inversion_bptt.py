@@ -1,6 +1,5 @@
 import torch
 import wandb
-import random
 import pyrallis
 from dataclasses import asdict
 from accelerate import Accelerator
@@ -49,7 +48,7 @@ def main(cfg: InstructInversionBPTTConfig):
     accelerator = Accelerator(
         log_with="wandb",
         mixed_precision=cfg.mixed_precision,
-        project_config=accelerator_config
+        project_config=accelerator_config,
     )
     device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
     # device = accelerator.device
@@ -93,19 +92,29 @@ def main(cfg: InstructInversionBPTTConfig):
     pipeline.text_encoder.to(device, dtype=inference_dtype)
     pipeline.unet.to(device, dtype=inference_dtype)
 
+    params_to_optimize = [
+        {
+            "params": pipeline.embedding_manager.embedding_parameters(),
+            "lr": cfg.train.lr_text_embed,
+        }
+    ]
     # Set lora layers
     if cfg.train.use_lora:
-        pipeline.set_peft_unet()
+        lora_layers = pipeline.apply_lora()
+        params_to_optimize.append(
+            {"params": lora_layers, "lr": cfg.train.lr_lora}
+        )
+        pipeline.unet.train()
 
-    pipeline.unet.requires_grad_(True)
-    pipeline.unet.train()
+    # pipeline.unet.requires_grad_(True)
 
     # Initialize the optimizer
-    optimizer = torch.optim.AdamW(pipeline.parameters(), lr=cfg.train.learning_rate)
+    optimizer = torch.optim.AdamW(params_to_optimize)
 
     # pipeline, optimizer, data_loader, eval_data_loader = accelerator.prepare(
     #     pipeline, optimizer, data_loader, eval_data_loader
     # )
+    
     for epoch in range(cfg.epochs):
         print(f"epoch {epoch}:")
         for i, batch in enumerate(data_loader):
@@ -122,8 +131,7 @@ def main(cfg: InstructInversionBPTTConfig):
                 num_inference_steps=cfg.num_inference_steps,
                 grad_checkpoint=cfg.train.grad_checkpoint,
                 truncated_backprop=cfg.train.truncated_backprop,
-                truncated_backprop_rand=cfg.train.truncated_backprop_rand,
-                truncated_backprop_minmax=cfg.train.truncated_backprop_minmax
+                truncated_backprop_minmax=cfg.train.truncated_backprop_minmax,
             )
             print(f"batch {i} - loss: {loss.item()}")
             loss.backward()

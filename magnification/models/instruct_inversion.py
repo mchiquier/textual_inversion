@@ -9,6 +9,7 @@ from diffusers import (
 )
 from diffusers.loaders import AttnProcsLayers
 from diffusers.models.attention_processor import LoRAAttnProcessor
+from diffusers.training_utils import cast_training_params
 from peft import get_peft_model, LoraConfig
 from tqdm import tqdm
 from typing import Optional, Union
@@ -389,26 +390,31 @@ class InstructInversionBPTT(InstructInversion):
         self.unet = _Wrapper(self.unet, self.unet.attn_processors)
 
     def find_all_linear_names(self):
-        lora_module_names = set()
-        for name, module in self.unet.named_modules():
-            if isinstance(module, nn.Linear):
-                names = name.split(".")
-                linear_name = names[-1]
-                if len(names) == 1:
-                    linear_name = names[0]
-                # if str(linear_name).isdigit():
-                if str(linear_name).isdigit() or "emb" in linear_name:
-                    continue
+        # lora_module_names = set()
+        # for name, module in self.unet.named_modules():
+        #     if isinstance(module, nn.Linear):
+        #         names = name.split(".")
+        #         linear_name = names[-1]
+        #         if len(names) == 1:
+        #             linear_name = names[0]
+        #         # if str(linear_name).isdigit():
+        #         if str(linear_name).isdigit() or "emb" in linear_name:
+        #             continue
 
-                lora_module_names.add(linear_name)
-
+        #         lora_module_names.add(linear_name)
+        lora_module_names = ["to_k", "to_q", "to_v", "to_out.0"]
         return list(lora_module_names)
 
-    def set_peft_unet(self):
+    def apply_lora(self, rank: int = 4) -> list:
         lora_module_names = self.find_all_linear_names()
-        peft_config = LoraConfig(r=4, target_modules=lora_module_names)
-        self.unet = get_peft_model(self.unet, peft_config)
-        self.unet.print_trainable_parameters()
+        peft_config = LoraConfig(r=rank, target_modules=lora_module_names)
+        self.unet.add_adapter(peft_config)
+        if self.unet.dtype == torch.float16:
+            cast_training_params(self.unet, dtype=torch.float32)
+        lora_layers = filter(lambda p: p.requires_grad, self.unet.parameters())
+        return lora_layers
+        # self.unet = get_peft_model(self.unet, peft_config)
+        # self.unet.print_trainable_parameters()
 
     def forward(
         self,
