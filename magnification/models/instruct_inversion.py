@@ -411,7 +411,7 @@ class InstructInversionBPTT(InstructInversion):
         self.unet.add_adapter(peft_config)
         if self.unet.dtype == torch.float16:
             cast_training_params(self.unet, dtype=torch.float32)
-        lora_layers = filter(lambda p: p.requires_grad, self.unet.parameters())
+        lora_layers = list(filter(lambda p: p.requires_grad, self.unet.parameters()))
         return lora_layers
         # self.unet = get_peft_model(self.unet, peft_config)
         # self.unet.print_trainable_parameters()
@@ -427,9 +427,7 @@ class InstructInversionBPTT(InstructInversion):
         eta: float = 0.0,
         grad_checkpoint: bool = True,
         truncated_backprop: bool = False,
-        truncated_backprop_rand: bool = False,
         truncated_backprop_minmax: Union[tuple, list] = (35, 45),
-        trunc_backprop_timestep: int = 100,
         generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     ):
         self._guidance_scale = guidance_scale
@@ -521,16 +519,12 @@ class InstructInversionBPTT(InstructInversion):
                 ).sample
 
             if truncated_backprop:
-                if truncated_backprop_rand:
-                    timestep = random.randint(
-                        truncated_backprop_minmax[0],
-                        truncated_backprop_minmax[1],
-                    )
-                    if i < timestep:
-                        noise_pred = noise_pred.detach()
-                else:
-                    if i < trunc_backprop_timestep:
-                        noise_pred = noise_pred.detach()
+                timestep = random.randint(
+                    truncated_backprop_minmax[0],
+                    truncated_backprop_minmax[1],
+                )
+                if i < timestep:
+                    noise_pred = noise_pred.detach()
 
             # perform guidance
             if self.do_classifier_free_guidance:

@@ -106,8 +106,6 @@ def main(cfg: InstructInversionBPTTConfig):
         )
         pipeline.unet.train()
 
-    # pipeline.unet.requires_grad_(True)
-
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(params_to_optimize)
 
