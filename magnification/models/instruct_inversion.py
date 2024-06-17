@@ -670,11 +670,11 @@ class InstructInversionClf(InstructInversionBPTT):
 
         logits_per_image = self.clf(output_image)
         probs = logits_per_image.softmax(dim=1)
-        targets = torch.ones((batch_size,)).to(logits_per_image.device)
+        targets = torch.ones((batch_size,)).to(logits_per_image.device).long()
 
         loss_fn = nn.CrossEntropyLoss()
         loss = loss_fn(logits_per_image, targets)
-        
+
         return loss, logits_per_image, probs
 
 

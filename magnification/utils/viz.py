@@ -17,43 +17,53 @@ def plot_grid(sample: torch.Tensor, save_path: Path, nrow: int = 4):
 
 
 def plot_logits_and_predictions(
-    logits: torch.Tensor, predictions: torch.Tensor, save_path: Path
+    logits: torch.Tensor, probs: torch.Tensor, save_path: Path, max_samples: int = 8
 ):
-    num_samples = logits.shape[0]
+    num_samples = min(logits.shape[0], max_samples)
     num_classes = logits.shape[1]
 
-    fig, axes = plt.subplots(num_samples, 1, figsize=(10, 2 * num_samples))
+    fig, axes = plt.subplots(num_samples, 2, figsize=(10, 2 * num_samples))
     if num_samples == 1:
         axes = [axes]
 
     for i in range(num_samples):
         ax = axes[i]
-        logit_values = logits[i].detach().cpu().numpy()
-        prediction = predictions[i].detach().cpu().numpy()
+        try:
+            logit_values = logits[i].detach().cpu().numpy()
+            prob_values = probs.detach().cpu().numpy()[i]
+        except:
+            print(1)
+
+        prediction = np.argmax(prob_values)
 
         # Plot logits
-        ax.bar(
+        ax[0].bar(
             np.arange(num_classes),
             logit_values,
             color="blue",
             alpha=0.6,
             label="Logits",
         )
+        ax[0].set_xticks(np.arange(num_classes))
+        ax[0].set_xlabel("Classes")
+        ax[0].set_ylabel("Logits")
+        ax[0].set_title(f"Sample {i + 1} - Prediction: Class {prediction}")
+        ax[0].legend()
 
         # Highlight the predicted class
-        ax.bar(
-            prediction,
-            logit_values[prediction],
+        ax[1].bar(
+            np.arange(num_classes),
+            prob_values,
             color="red",
             alpha=0.6,
-            label="Predicted Class",
+            label="Probs",
         )
-
-        ax.set_xticks(np.arange(num_classes))
-        ax.set_xlabel("Classes")
-        ax.set_ylabel("Logits")
-        ax.set_title(f"Sample {i + 1} - Prediction: Class {prediction}")
-        ax.legend()
+        ax[1].set_xticks(np.arange(num_classes))
+        ax[1].set_xlabel("Classes")
+        ax[1].set_ylabel("Probs")
+        ax[1].set_title(f"Sample {i + 1} - Prediction: Class {prediction}")
+        ax[1].legend()
 
     plt.tight_layout()
     plt.savefig(save_path)
+    plt.close()

@@ -31,8 +31,8 @@ def main(cfg: InstructInversionBPTTConfig):
     )
 
     # TODO: REMOVE!!
-    subset_indices = list(range(10))
-    dataset = Subset(dataset, subset_indices)
+    # subset_indices = list(range(10))
+    # dataset = Subset(dataset, subset_indices)
 
     data_loader = DataLoader(
         dataset, batch_size=cfg.train.total_batch_size, shuffle=True
@@ -42,7 +42,7 @@ def main(cfg: InstructInversionBPTTConfig):
         cfg.diffusion.embedding_config.placeholder_strings,
         transform=transform,
     )
-    eval_dataset = Subset(eval_dataset, subset_indices)
+    # eval_dataset = Subset(eval_dataset, subset_indices)
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.total_batch_size)
 
     accelerator_config = ProjectConfiguration(
@@ -124,7 +124,7 @@ def main(cfg: InstructInversionBPTTConfig):
             image = image.to(device)
             image_edit = image_edit.to(device)
 
-            loss, logits, pred = pipeline(
+            loss, logits, probs = pipeline(
                 image=image,
                 edited_image=image_edit,
                 prompt=prompt,
@@ -160,7 +160,7 @@ def main(cfg: InstructInversionBPTTConfig):
 
         # plot logits and pred
         logits_plot_path = epoch_output_dir / f"{loss.item()}_logits.jpg"
-        plot_logits_and_predictions(logits, pred, logits_plot_path)
+        plot_logits_and_predictions(logits, probs, logits_plot_path)
 
         # eval loop
         print("evaluation")
