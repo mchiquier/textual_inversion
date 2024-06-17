@@ -5,11 +5,11 @@ from dataclasses import asdict
 from accelerate import Accelerator
 from accelerate.utils import set_seed, ProjectConfiguration
 from torchvision import transforms
-from torch.utils.data import DataLoader, ConcatDataset
-from magnification.utils.viz import plot_grid
-from magnification.datasets import TextualInversionEdits, TextualInversionEval
+from torch.utils.data import DataLoader, ConcatDataset, Subset
+from magnification.utils.viz import plot_grid, plot_logits_and_predictions
+from magnification.datasets import TextualInversionAFHQ, TextualInversionEval
 from magnification.textual_inversion_config import InstructInversionBPTTConfig
-from magnification.models.instruct_inversion import InstructInversionBPTT, InstructInversionClf
+from magnification.models.instruct_inversion import InstructInversionClf
 
 
 @pyrallis.wrap()
@@ -20,15 +20,20 @@ def main(cfg: InstructInversionBPTTConfig):
     )
     dataset = ConcatDataset(
         [
-            TextualInversionEdits(
-                cfg.dataset.image_dir,
-                cfg.dataset.image_edits_dir,
-                cfg.diffusion.embedding_config.placeholder_strings,
+            TextualInversionAFHQ(
+                root_dir=cfg.dataset.image_dir,
+                placeholder_str=cfg.diffusion.embedding_config.placeholder_strings,
                 transform=transform,
+                split="train",
             )
         ]
         * cfg.dataset.repeats
     )
+
+    # TODO: REMOVE!!
+    subset_indices = list(range(10))
+    dataset = Subset(dataset, subset_indices)
+
     data_loader = DataLoader(
         dataset, batch_size=cfg.train.total_batch_size, shuffle=True
     )
@@ -37,6 +42,7 @@ def main(cfg: InstructInversionBPTTConfig):
         cfg.diffusion.embedding_config.placeholder_strings,
         transform=transform,
     )
+    eval_dataset = Subset(eval_dataset, subset_indices)
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.total_batch_size)
 
     accelerator_config = ProjectConfiguration(
@@ -88,10 +94,7 @@ def main(cfg: InstructInversionBPTTConfig):
         inference_dtype = torch.bfloat16
 
     # Move unet, vae and text_encoder to device and cast to inference_dtype
-    pipeline.vae.to(device, dtype=inference_dtype)
-    pipeline.text_encoder.to(device, dtype=inference_dtype)
-    pipeline.unet.to(device, dtype=inference_dtype)
-    pipeline.clf.to(device, dtype=inference_dtype)
+    pipeline.to(device, dtype=inference_dtype)
 
     params_to_optimize = [
         {
@@ -102,19 +105,16 @@ def main(cfg: InstructInversionBPTTConfig):
     # Set lora layers
     if cfg.train.use_lora:
         lora_layers = pipeline.apply_lora()
-        params_to_optimize.append(
-            {"params": lora_layers, "lr": cfg.train.lr_lora}
-        )
+        params_to_optimize.append({"params": lora_layers, "lr": cfg.train.lr_lora})
         pipeline.unet.train()
 
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(params_to_optimize)
-    # optimizer = torch.optim.AdamW(pipeline.parameters(), lr=cfg.train.lr_lora)
 
     # pipeline, optimizer, data_loader, eval_data_loader = accelerator.prepare(
     #     pipeline, optimizer, data_loader, eval_data_loader
     # )
-    
+
     for epoch in range(cfg.epochs):
         print(f"epoch {epoch}:")
         for i, batch in enumerate(data_loader):
@@ -124,7 +124,7 @@ def main(cfg: InstructInversionBPTTConfig):
             image = image.to(device)
             image_edit = image_edit.to(device)
 
-            loss = pipeline(
+            loss, logits, pred = pipeline(
                 image=image,
                 edited_image=image_edit,
                 prompt=prompt,
@@ -157,6 +157,10 @@ def main(cfg: InstructInversionBPTTConfig):
         )
         train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
         plot_grid(sample, train_batch_save_path)
+
+        # plot logits and pred
+        logits_plot_path = epoch_output_dir / f"{loss.item()}_logits.jpg"
+        plot_logits_and_predictions(logits, pred, logits_plot_path)
 
         # eval loop
         print("evaluation")

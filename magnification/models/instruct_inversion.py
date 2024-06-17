@@ -669,18 +669,17 @@ class InstructInversionClf(InstructInversionBPTT):
         )
 
         logits_per_image = self.clf(output_image)
-        logits_dog = logits_per_image[..., 1]
-        targets = torch.zeros((batch_size,)).to(logits_dog.device)
+        probs = logits_per_image.softmax(dim=1)
+        targets = torch.ones((batch_size,)).to(logits_per_image.device)
 
-        m = nn.Sigmoid()
-        loss_fn = nn.BCELoss()
-
-        loss = loss_fn(m(logits_dog), targets)
-        return loss
+        loss_fn = nn.CrossEntropyLoss()
+        loss = loss_fn(logits_per_image, targets)
+        
+        return loss, logits_per_image, probs
 
 
 class DiffCLIPModel(nn.Module):
-    # Custom module for handling differential CLIP with preprocessing
+    # Custom module for handling differentiable CLIP with preprocessing
     def __init__(self, clip_model: CLIPModel, processor: CLIPProcessor):
         super(DiffCLIPModel, self).__init__()
         self.clip_model = clip_model
