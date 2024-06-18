@@ -1,4 +1,5 @@
 import os
+import PIL.Image
 import numpy as np
 import PIL
 from PIL import Image
@@ -186,10 +187,10 @@ class PersonalizedBase(Dataset):
             self._length = self.num_images * repeats
 
         self.size = size
-        self.interpolation = {"linear": PIL.Image.LINEAR,
-                              "bilinear": PIL.Image.BILINEAR,
-                              "bicubic": PIL.Image.BICUBIC,
-                              "lanczos": PIL.Image.LANCZOS,
+        self.interpolation = {"linear": PIL.Image.Resampling.BILINEAR,
+                              "bilinear": PIL.Image.Resampling.BILINEAR,
+                              "bicubic": PIL.Image.Resampling.BICUBIC,
+                              "lanczos": PIL.Image.Resampling.LANCZOS,
                               }[interpolation]
 
         self.flip_p = flip_p

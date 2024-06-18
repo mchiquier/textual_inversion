@@ -362,18 +362,6 @@ class InstructInversionBPTT(InstructInversion):
         self.noise_scheduler = DDIMScheduler.from_config(self.pipe.scheduler.config)
 
     def find_all_linear_names(self):
-        # lora_module_names = set()
-        # for name, module in self.unet.named_modules():
-        #     if isinstance(module, nn.Linear):
-        #         names = name.split(".")
-        #         linear_name = names[-1]
-        #         if len(names) == 1:
-        #             linear_name = names[0]
-        #         # if str(linear_name).isdigit():
-        #         if str(linear_name).isdigit() or "emb" in linear_name:
-        #             continue
-
-        #         lora_module_names.add(linear_name)
         lora_module_names = ["to_k", "to_q", "to_v", "to_out.0"]
         return list(lora_module_names)
 
@@ -554,10 +542,6 @@ class InstructInversionClf(InstructInversionBPTT):
         self._guidance_scale = guidance_scale
         self._image_guidance_scale = image_guidance_scale
 
-        edited_image = self.pipe.image_processor.preprocess(edited_image)
-        edited_latents = self.vae.encode(edited_image).latent_dist.sample()
-        edited_latents = edited_latents * self.vae.config.scaling_factor
-
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
         elif prompt is not None and (
@@ -675,6 +659,9 @@ class InstructInversionClf(InstructInversionBPTT):
         loss_fn = nn.CrossEntropyLoss()
         loss = loss_fn(logits_per_image, targets)
 
+        reg_loss = F.mse_loss(output_image, image)
+        loss = loss + reg_loss
+
         return loss, logits_per_image, probs
 
 
@@ -690,7 +677,6 @@ class DiffCLIPModel(nn.Module):
         image: torch.Tensor,
         texts: Optional[list] = ["a photo of a cat", "a photo of a dog"],
     ):
-        # inputs = self.processor(images=image, return_tensors="pt", do_rescale=False).to(image.device)
         transform = transforms.Resize(
             224, interpolation=transforms.InterpolationMode.BICUBIC
         )

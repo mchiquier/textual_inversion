@@ -2,8 +2,8 @@ import torch
 import wandb
 import pyrallis
 from dataclasses import asdict
-from accelerate import Accelerator
-from accelerate.utils import set_seed, ProjectConfiguration
+from accelerate import Accelerator, DistributedDataParallelKwargs
+from accelerate.utils import set_seed
 from torchvision import transforms
 from torch.utils.data import DataLoader, ConcatDataset, Subset
 from magnification.utils.viz import plot_grid, plot_logits_and_predictions
@@ -30,9 +30,10 @@ def main(cfg: InstructInversionBPTTConfig):
         * cfg.dataset.repeats
     )
 
-    # TODO: REMOVE!!
-    subset_indices = list(range(10))
-    dataset = Subset(dataset, subset_indices)
+    # Option to take a subset of the training set (useful for debug)
+    if cfg.dataset.subset is not None:
+        subset_indices = list(range(cfg.dataset.subset))
+        dataset = Subset(dataset, subset_indices)
 
     data_loader = DataLoader(
         dataset, batch_size=cfg.train.total_batch_size, shuffle=True
@@ -40,21 +41,15 @@ def main(cfg: InstructInversionBPTTConfig):
     eval_dataset = TextualInversionEval(
         cfg.dataset.eval_dir,
         cfg.diffusion.embedding_config.placeholder_strings,
-        transform=transform,
+        transform=transforms.Resize(cfg.dataset.img_size),
     )
-    eval_dataset = Subset(eval_dataset, subset_indices)
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.total_batch_size)
 
-    # accelerator_config = ProjectConfiguration(
-    #     project_dir=cfg.log_dir / cfg.run_name,
-    #     automatic_checkpoint_naming=True,
-    #     total_limit=cfg.num_checkpoint_limit,
-    # )
-
+    accelerator_kwargs = [DistributedDataParallelKwargs(find_unused_parameters=True)]
     accelerator = Accelerator(
         log_with="wandb",
         mixed_precision=cfg.mixed_precision,
-        # project_config=accelerator_config,
+        kwargs_handlers=accelerator_kwargs
     )
     # device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
     device = accelerator.device
@@ -116,26 +111,26 @@ def main(cfg: InstructInversionBPTTConfig):
     )
 
     for epoch in range(cfg.epochs):
-        print(f"epoch {epoch}:")
+        accelerator.print(f"epoch {epoch}:")
 
         train_loss = 0.0
         for i, batch in enumerate(data_loader):
             optimizer.zero_grad()
 
-            image, image_edit, prompt = batch
+            image, prompt = batch
             # image = image.to(device)
             # image_edit = image_edit.to(device)
 
             loss, logits, probs = pipeline(
                 image=image,
-                edited_image=image_edit,
+                edited_image=None,
                 prompt=prompt,
                 num_inference_steps=cfg.num_inference_steps,
                 grad_checkpoint=cfg.train.grad_checkpoint,
                 truncated_backprop=cfg.train.truncated_backprop,
                 truncated_backprop_minmax=cfg.train.truncated_backprop_minmax,
             )
-            print(f"batch {i} - loss: {loss.item()}")
+            accelerator.print(f"batch {i} - loss: {loss.item()}")
             # loss.backward()
             accelerator.backward(loss)
             optimizer.step()
@@ -148,46 +143,55 @@ def main(cfg: InstructInversionBPTTConfig):
             # save embeddings
             epoch_output_dir = cfg.log_dir / str(epoch)
             epoch_output_dir.mkdir(exist_ok=True)
-            pipeline.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
-            embed_mean = list(pipeline.embedding_manager.embedding_parameters())[0].mean()
+            unwrapped_pipeline = accelerator.unwrap_model(pipeline)
+            # pipeline.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
+            unwrapped_pipeline.embedding_manager.save(
+                epoch_output_dir / f"embedding_{epoch}.pt"
+            )
+            embed_mean = list(
+                unwrapped_pipeline.embedding_manager.embedding_parameters()
+            )[0].mean()
             grads = [
                 (name, param.grad.shape)
-                for name, param in pipeline.named_parameters()
+                for name, param in unwrapped_pipeline.named_parameters()
                 if param.grad is not None
             ]
-            print(f"number of learned params: {len(grads)}")
-            print(f"embed-mean: {embed_mean}")
+            accelerator.print(f"number of learned params: {len(grads)}")
+            accelerator.print(f"embed-mean: {embed_mean}")
 
-            logs = {"train/loss": train_loss,
-                    "train/embed-mean": embed_mean,
-                    "train/number-learned-params": len(grads)}
+            logs = {
+                "train/loss": train_loss,
+                "train/embed-mean": embed_mean,
+                "train/number-learned-params": len(grads),
+            }
 
             # visualize samples
-            sample = pipeline.sample(
-                image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps
-            )
-            train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
-            train_grid = plot_grid(sample, train_batch_save_path)
-            logs.update({"train/grid": wandb.Image(train_grid)})
+            # sample = pipeline.sample(
+            #     image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps
+            # )
+            # train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
+            # train_grid = plot_grid(sample, train_batch_save_path)
+            # logs.update({"train/grid": wandb.Image(train_grid)})
 
             # plot logits and pred
-            logits_plot_path = epoch_output_dir / f"{loss.item()}_logits.jpg"
-            fig = plot_logits_and_predictions(logits, probs, logits_plot_path)
-            logs.update({"logits": fig})
+            # logits_plot_path = epoch_output_dir / f"{loss.item()}_logits.jpg"
+            # fig = plot_logits_and_predictions(logits, probs, logits_plot_path)
+            # logs.update({"logits": fig})
 
             # eval loop
-            print("evaluation")
+            accelerator.print("evaluation")
             for batch in eval_data_loader:
                 image, prompt = batch
                 # image = image.to(device)
-                sample = pipeline.sample(
+                sample = unwrapped_pipeline.sample(
                     image,
                     prompt,
                     output_type="pt",
                     num_inference_steps=cfg.num_inference_steps,
                 )
+                concat_samples = torch.cat([image, sample])
                 eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
-                eval_grid = plot_grid(sample, eval_batch_save_path)
+                eval_grid = plot_grid(concat_samples, eval_batch_save_path, nrow=8)
                 logs.update({"val/grid": wandb.Image(eval_grid)})
                 break
             accelerator.log(logs)

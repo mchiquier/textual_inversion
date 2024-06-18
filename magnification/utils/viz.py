@@ -1,13 +1,19 @@
 import torch
 from PIL import Image
 from pathlib import Path
+from typing import Optional
 from torchvision.utils import make_grid
 import numpy as np
 import matplotlib.pyplot as plt
 
 
-def plot_grid(sample: torch.Tensor, save_path: Path, nrow: int = 4):
-    sample = sample.detach().cpu()
+def plot_grid(
+    sample: torch.Tensor,
+    save_path: Path,
+    nrow: int = 4,
+    max_samples: Optional[int] = None,
+):
+    sample = sample.detach().cpu()[:max_samples, ...]
     grid = make_grid(sample, nrow=nrow)
     grid = grid.transpose(0, 1).transpose(1, 2).squeeze(-1)
     grid = grid.numpy()

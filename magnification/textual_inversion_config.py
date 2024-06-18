@@ -20,6 +20,7 @@ class DatasetConfig:
     eval_dir: Path
     repeats: Optional[int] = 1
     img_size: Optional[int] = 256
+    subset: Optional[int] = None
 
 
 @dataclass

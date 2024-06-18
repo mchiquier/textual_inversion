@@ -12,3 +12,4 @@ results_basile/
 *.png
 *.pt
 *.jpg
+*wandb*

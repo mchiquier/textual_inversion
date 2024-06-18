@@ -129,22 +129,16 @@ class TextualInversionAFHQ(AFHQ):
 
     def __getitem__(self, idx):
         img_path = self.cat_images[idx]
-        img_edit_path = self.dog_images[idx]
-
         image = convert_to_np(img_path)
-        image_edit = convert_to_np(img_edit_path)
-
-        images = np.concatenate([image, image_edit])
-        images = torch.tensor(images)
+        image = torch.tensor(image)
 
         if self.transform:
-            images = self.transform(images)
+            image = self.transform(image)
 
-        images = images / 255.0
-        image, image_edit = images.chunk(2)
+        image = image / 255.0
         # TODO: support multiple placeholder strings
         prompt = self.placeholder_str[0]
-        return image, image_edit, prompt
+        return image, prompt
 
 
 def convert_to_np(img_path: Path):
