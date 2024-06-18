@@ -49,7 +49,7 @@ def main(cfg: InstructInversionBPTTConfig):
     accelerator = Accelerator(
         log_with="wandb",
         mixed_precision=cfg.mixed_precision,
-        kwargs_handlers=accelerator_kwargs
+        kwargs_handlers=accelerator_kwargs,
     )
     # device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
     device = accelerator.device
@@ -118,10 +118,11 @@ def main(cfg: InstructInversionBPTTConfig):
             optimizer.zero_grad()
 
             image, prompt = batch
+            curr_batch_size = image.shape[0]
             # image = image.to(device)
             # image_edit = image_edit.to(device)
 
-            loss, logits, probs = pipeline(
+            loss, _, _ = pipeline(
                 image=image,
                 edited_image=None,
                 prompt=prompt,
@@ -135,7 +136,7 @@ def main(cfg: InstructInversionBPTTConfig):
             accelerator.backward(loss)
             optimizer.step()
 
-            train_loss += loss
+            train_loss += loss.item() * curr_batch_size
 
         train_loss /= len(dataset)
 
@@ -145,9 +146,9 @@ def main(cfg: InstructInversionBPTTConfig):
             epoch_output_dir.mkdir(exist_ok=True)
             unwrapped_pipeline = accelerator.unwrap_model(pipeline)
             # pipeline.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
-            unwrapped_pipeline.embedding_manager.save(
-                epoch_output_dir / f"embedding_{epoch}.pt"
-            )
+            save_dict = unwrapped_pipeline.embedding_manager.get_save_dict()
+            accelerator.save(save_dict, epoch_output_dir / f"embedding_{epoch}.pt")
+
             embed_mean = list(
                 unwrapped_pipeline.embedding_manager.embedding_parameters()
             )[0].mean()
@@ -180,20 +181,37 @@ def main(cfg: InstructInversionBPTTConfig):
 
             # eval loop
             accelerator.print("evaluation")
-            for batch in eval_data_loader:
+            val_loss = 0.0
+            for i, batch in enumerate(eval_data_loader):
                 image, prompt = batch
+                curr_batch_size = image.shape[0]
+                with torch.no_grad():
+                    val_batch_loss, _, _ = pipeline(
+                        image=image,
+                        edited_image=None,
+                        prompt=prompt,
+                        num_inference_steps=cfg.num_inference_steps,
+                        grad_checkpoint=cfg.train.grad_checkpoint,
+                        truncated_backprop=cfg.train.truncated_backprop,
+                        truncated_backprop_minmax=cfg.train.truncated_backprop_minmax,
+                    )
+
+                    val_loss += val_batch_loss.item() * curr_batch_size
                 # image = image.to(device)
-                sample = unwrapped_pipeline.sample(
-                    image,
-                    prompt,
-                    output_type="pt",
-                    num_inference_steps=cfg.num_inference_steps,
-                )
-                concat_samples = torch.cat([image, sample])
-                eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
-                eval_grid = plot_grid(concat_samples, eval_batch_save_path, nrow=8)
-                logs.update({"val/grid": wandb.Image(eval_grid)})
-                break
+                if i == 0:
+                    sample = unwrapped_pipeline.sample(
+                        image,
+                        prompt,
+                        output_type="pt",
+                        num_inference_steps=cfg.num_inference_steps,
+                    )
+                    concat_samples = torch.cat([image, sample])
+                    eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
+                    eval_grid = plot_grid(concat_samples, eval_batch_save_path, nrow=8)
+                    logs.update({"val/grid": wandb.Image(eval_grid)})
+            
+            val_loss /= len(eval_dataset)
+            logs.update({"val/loss": val_loss})
             accelerator.log(logs)
 
     accelerator.end_training()

@@ -1,8 +1,13 @@
 dataset:
-  image_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/train-a
-  image_edits_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/train-b
-  eval_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/eval-a
-  repeats: 100
+  # image_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/train-a
+  # image_edits_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/train-b
+  # eval_dir: /proj/vondrick4/VisualMacros/Photoshop/whiskers/eval-a
+
+  image_dir: /proj/vondrick2/orr/projects/stargan-v2/data/afhq
+  image_edits_dir: /proj/vondrick2/orr/projects/stargan-v2/data/afhq/train/dog
+  eval_dir: /proj/vondrick2/orr/projects/stargan-v2/data/afhq/val/cat
+  repeats: 1
+  subset: 10
 
 diffusion:
   embedding_config:
@@ -18,21 +23,21 @@ train:
   total_samples_per_epoch: 256
   num_gpus: 4
 
-  learning_rate: 3e-4
+  lr_lora: 3e-4
+  lr_text_embed: 0.16
 
   use_lora: false
   grad_checkpoint: true
   truncated_backprop: true
-  truncated_backprop_rand: true
-  truncated_backprop_minmax: [50, 100]
+  truncated_backprop_minmax: [25, 50]
 
-log_dir: ./results/bptt/whiskers/full_unet_bsz_32_steps_100_gckpt_lr3e-4_trunc_rand_50_100
-# log_dir: ./results/bptt/whiskers/check
+# log_dir: ./results/classifier/cats_dogs/bsz32_steps50_lr0.16_3e-4_trunc25_50_mse
+log_dir: ./results/cats_dogs/check
 run_name: check
 num_checkpoint_limit: 10
 mixed_precision: "no"
-num_inference_steps: 100
-epochs: 6
-device: 3
+num_inference_steps: 50
+epochs: 1
+device: 1
 allow_tf32: true
-debug: true
+debug: false

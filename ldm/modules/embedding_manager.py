@@ -127,10 +127,14 @@ class EmbeddingManager(nn.Module):
                     tokenized_text[row] = new_token_row
 
         return embedded_text
+    
+    def get_save_dict(self):
+        return {"string_to_token": self.string_to_token_dict,
+                "string_to_param": self.string_to_param_dict}
 
     def save(self, ckpt_path):
-        torch.save({"string_to_token": self.string_to_token_dict,
-                    "string_to_param": self.string_to_param_dict}, ckpt_path)
+        save_dict = self.get_save_dict()
+        torch.save(save_dict, ckpt_path)
 
     def load(self, ckpt_path):
         ckpt = torch.load(ckpt_path, map_location='cpu')
