@@ -31,8 +31,8 @@ def main(cfg: InstructInversionBPTTConfig):
     )
 
     # TODO: REMOVE!!
-    # subset_indices = list(range(10))
-    # dataset = Subset(dataset, subset_indices)
+    subset_indices = list(range(10))
+    dataset = Subset(dataset, subset_indices)
 
     data_loader = DataLoader(
         dataset, batch_size=cfg.train.total_batch_size, shuffle=True
@@ -42,22 +42,22 @@ def main(cfg: InstructInversionBPTTConfig):
         cfg.diffusion.embedding_config.placeholder_strings,
         transform=transform,
     )
-    # eval_dataset = Subset(eval_dataset, subset_indices)
+    eval_dataset = Subset(eval_dataset, subset_indices)
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.total_batch_size)
 
-    accelerator_config = ProjectConfiguration(
-        project_dir=cfg.log_dir / cfg.run_name,
-        automatic_checkpoint_naming=True,
-        total_limit=cfg.num_checkpoint_limit,
-    )
+    # accelerator_config = ProjectConfiguration(
+    #     project_dir=cfg.log_dir / cfg.run_name,
+    #     automatic_checkpoint_naming=True,
+    #     total_limit=cfg.num_checkpoint_limit,
+    # )
 
     accelerator = Accelerator(
         log_with="wandb",
         mixed_precision=cfg.mixed_precision,
-        project_config=accelerator_config,
+        # project_config=accelerator_config,
     )
-    device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
-    # device = accelerator.device
+    # device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
+    device = accelerator.device
 
     if accelerator.is_main_process:
         wandb_args = {}
@@ -111,18 +111,20 @@ def main(cfg: InstructInversionBPTTConfig):
     # Initialize the optimizer
     optimizer = torch.optim.AdamW(params_to_optimize)
 
-    # pipeline, optimizer, data_loader, eval_data_loader = accelerator.prepare(
-    #     pipeline, optimizer, data_loader, eval_data_loader
-    # )
+    pipeline, optimizer, data_loader, eval_data_loader = accelerator.prepare(
+        pipeline, optimizer, data_loader, eval_data_loader
+    )
 
     for epoch in range(cfg.epochs):
         print(f"epoch {epoch}:")
+
+        train_loss = 0.0
         for i, batch in enumerate(data_loader):
             optimizer.zero_grad()
 
             image, image_edit, prompt = batch
-            image = image.to(device)
-            image_edit = image_edit.to(device)
+            # image = image.to(device)
+            # image_edit = image_edit.to(device)
 
             loss, logits, probs = pipeline(
                 image=image,
@@ -134,48 +136,63 @@ def main(cfg: InstructInversionBPTTConfig):
                 truncated_backprop_minmax=cfg.train.truncated_backprop_minmax,
             )
             print(f"batch {i} - loss: {loss.item()}")
-            loss.backward()
-            # accelerator.backward(loss)
+            # loss.backward()
+            accelerator.backward(loss)
             optimizer.step()
 
-        # save embeddings
-        epoch_output_dir = cfg.log_dir / str(epoch)
-        epoch_output_dir.mkdir(exist_ok=True)
-        pipeline.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
-        embed_mean = list(pipeline.embedding_manager.embedding_parameters())[0].mean()
-        grads = [
-            (name, param.grad.shape)
-            for name, param in pipeline.named_parameters()
-            if param.grad is not None
-        ]
-        print(f"number of learned params: {len(grads)}")
-        print(f"embed-mean: {embed_mean}")
+            train_loss += loss
 
-        # visualize samples
-        sample = pipeline.sample(
-            image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps
-        )
-        train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
-        plot_grid(sample, train_batch_save_path)
+        train_loss /= len(dataset)
 
-        # plot logits and pred
-        logits_plot_path = epoch_output_dir / f"{loss.item()}_logits.jpg"
-        plot_logits_and_predictions(logits, probs, logits_plot_path)
+        if accelerator.is_main_process:
+            # save embeddings
+            epoch_output_dir = cfg.log_dir / str(epoch)
+            epoch_output_dir.mkdir(exist_ok=True)
+            pipeline.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
+            embed_mean = list(pipeline.embedding_manager.embedding_parameters())[0].mean()
+            grads = [
+                (name, param.grad.shape)
+                for name, param in pipeline.named_parameters()
+                if param.grad is not None
+            ]
+            print(f"number of learned params: {len(grads)}")
+            print(f"embed-mean: {embed_mean}")
 
-        # eval loop
-        print("evaluation")
-        for batch in eval_data_loader:
-            image, prompt = batch
-            image = image.to(device)
+            logs = {"train/loss": train_loss,
+                    "train/embed-mean": embed_mean,
+                    "train/number-learned-params": len(grads)}
+
+            # visualize samples
             sample = pipeline.sample(
-                image,
-                prompt,
-                output_type="pt",
-                num_inference_steps=cfg.num_inference_steps,
+                image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps
             )
-            eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
-            plot_grid(sample, eval_batch_save_path)
-            break
+            train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
+            train_grid = plot_grid(sample, train_batch_save_path)
+            logs.update({"train/grid": wandb.Image(train_grid)})
+
+            # plot logits and pred
+            logits_plot_path = epoch_output_dir / f"{loss.item()}_logits.jpg"
+            fig = plot_logits_and_predictions(logits, probs, logits_plot_path)
+            logs.update({"logits": fig})
+
+            # eval loop
+            print("evaluation")
+            for batch in eval_data_loader:
+                image, prompt = batch
+                # image = image.to(device)
+                sample = pipeline.sample(
+                    image,
+                    prompt,
+                    output_type="pt",
+                    num_inference_steps=cfg.num_inference_steps,
+                )
+                eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
+                eval_grid = plot_grid(sample, eval_batch_save_path)
+                logs.update({"val/grid": wandb.Image(eval_grid)})
+                break
+            accelerator.log(logs)
+
+    accelerator.end_training()
 
 
 if __name__ == "__main__":

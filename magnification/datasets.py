@@ -33,20 +33,6 @@ class AFHQ(Dataset):
         return image, label
 
 
-class Cats(AFHQ):
-    def __init__(self, root_dir: Path, split: str, transform=None):
-        super().__init__(root_dir, split, transform)
-        self.image_list = self.cat_images
-        self.labels = [0] * len(self.cat_images)
-
-
-class Dogs(AFHQ):
-    def __init__(self, root_dir: Path, split: str, transform=None):
-        super().__init__(root_dir, split, transform)
-        self.image_list = self.dog_images
-        self.labels = [1] * len(self.dog_images)
-
-
 class ImageEdits(Dataset):
     def __init__(self, images_dir: Path, edits_dir: Path, transform=None) -> None:
         self.images_dir = images_dir
@@ -58,17 +44,12 @@ class ImageEdits(Dataset):
     def __len__(self):
         return len(self.image_list)
 
-    @staticmethod
-    def convert_to_np(img_path: Path):
-        image = Image.open(img_path).convert("RGB")
-        return np.array(image).transpose(2, 0, 1)
-
     def __getitem__(self, idx):
         img_path = self.image_list[idx]
         img_edit_path = self.edits_dir / img_path.name
 
-        image = self.convert_to_np(img_path)
-        image_edit = self.convert_to_np(img_edit_path)
+        image = convert_to_np(img_path)
+        image_edit = convert_to_np(img_edit_path)
 
         images = np.concatenate([image, image_edit])
         images = torch.tensor(images)
@@ -96,8 +77,8 @@ class TextualInversionEdits(ImageEdits):
         img_path = self.image_list[idx]
         img_edit_path = self.edits_dir / img_path.name
 
-        image = self.convert_to_np(img_path)
-        image_edit = self.convert_to_np(img_edit_path)
+        image = convert_to_np(img_path)
+        image_edit = convert_to_np(img_edit_path)
 
         images = np.concatenate([image, image_edit])
         images = torch.tensor(images)
@@ -124,7 +105,7 @@ class TextualInversionEval(TextualInversionEdits):
 
     def __getitem__(self, idx):
         img_path = self.image_list[idx]
-        image = self.convert_to_np(img_path)
+        image = convert_to_np(img_path)
         image = torch.tensor(image)
 
         if self.transform:
@@ -134,3 +115,38 @@ class TextualInversionEval(TextualInversionEdits):
         # TODO: support multiple placeholder strings
         prompt = self.placeholder_str[0]
         return image, prompt
+
+
+class TextualInversionAFHQ(AFHQ):
+    def __init__(
+        self, root_dir: Path, split: str, placeholder_str: list[str], transform=None
+    ):
+        super().__init__(root_dir, split, transform)
+        self.placeholder_str = placeholder_str
+
+    def __len__(self):
+        return len(self.cat_images)
+
+    def __getitem__(self, idx):
+        img_path = self.cat_images[idx]
+        img_edit_path = self.dog_images[idx]
+
+        image = convert_to_np(img_path)
+        image_edit = convert_to_np(img_edit_path)
+
+        images = np.concatenate([image, image_edit])
+        images = torch.tensor(images)
+
+        if self.transform:
+            images = self.transform(images)
+
+        images = images / 255.0
+        image, image_edit = images.chunk(2)
+        # TODO: support multiple placeholder strings
+        prompt = self.placeholder_str[0]
+        return image, image_edit, prompt
+
+
+def convert_to_np(img_path: Path):
+    image = Image.open(img_path).convert("RGB")
+    return np.array(image).transpose(2, 0, 1)

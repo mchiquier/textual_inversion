@@ -14,6 +14,7 @@ def plot_grid(sample: torch.Tensor, save_path: Path, nrow: int = 4):
     grid = (grid * 255).astype(np.uint8)
     im = Image.fromarray(grid)
     im.save(save_path)
+    return im
 
 
 def plot_logits_and_predictions(
@@ -67,3 +68,5 @@ def plot_logits_and_predictions(
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
+
+    return fig
