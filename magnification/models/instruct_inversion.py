@@ -659,7 +659,14 @@ class InstructInversionClf(InstructInversionBPTT):
         loss_fn = nn.CrossEntropyLoss()
         loss = loss_fn(logits_per_image, targets)
 
-        reg_loss = F.mse_loss(output_image, image)
+        # pixel mse
+        # reg_loss = F.mse_loss(output_image, image)
+
+        # latents mse
+        if self.do_classifier_free_guidance:
+            image_latents, _, _ = image_latents.chunk(3)
+        reg_loss = F.mse_loss(latents, image_latents)
+
         loss = loss + reg_loss
 
         return loss, logits_per_image, probs

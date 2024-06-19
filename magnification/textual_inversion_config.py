@@ -113,6 +113,8 @@ class InstructInversionBPTTConfig:
     num_inference_steps: int
     device: int
     allow_tf32: bool
+    guidance_scale: Optional[float] = 7.5
+    image_guidance_scale: Optional[float] = 1.5
     debug: Optional[bool] = False
 
     def __post_init__(self):

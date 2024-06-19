@@ -119,14 +119,14 @@ def main(cfg: InstructInversionBPTTConfig):
 
             image, prompt = batch
             curr_batch_size = image.shape[0]
-            # image = image.to(device)
-            # image_edit = image_edit.to(device)
 
             loss, _, _ = pipeline(
                 image=image,
                 edited_image=None,
                 prompt=prompt,
                 num_inference_steps=cfg.num_inference_steps,
+                guidance_scale=cfg.guidance_scale,
+                image_guidance_scale=cfg.image_guidance_scale,
                 grad_checkpoint=cfg.train.grad_checkpoint,
                 truncated_backprop=cfg.train.truncated_backprop,
                 truncated_backprop_minmax=cfg.train.truncated_backprop_minmax,
@@ -145,7 +145,6 @@ def main(cfg: InstructInversionBPTTConfig):
             epoch_output_dir = cfg.log_dir / str(epoch)
             epoch_output_dir.mkdir(exist_ok=True)
             unwrapped_pipeline = accelerator.unwrap_model(pipeline)
-            # pipeline.embedding_manager.save(epoch_output_dir / f"embedding_{epoch}.pt")
             save_dict = unwrapped_pipeline.embedding_manager.get_save_dict()
             accelerator.save(save_dict, epoch_output_dir / f"embedding_{epoch}.pt")
 
@@ -186,7 +185,7 @@ def main(cfg: InstructInversionBPTTConfig):
                 image, prompt = batch
                 curr_batch_size = image.shape[0]
                 with torch.no_grad():
-                    val_batch_loss, _, _ = pipeline(
+                    val_batch_loss, _, _ = unwrapped_pipeline(
                         image=image,
                         edited_image=None,
                         prompt=prompt,
@@ -195,9 +194,8 @@ def main(cfg: InstructInversionBPTTConfig):
                         truncated_backprop=cfg.train.truncated_backprop,
                         truncated_backprop_minmax=cfg.train.truncated_backprop_minmax,
                     )
+                val_loss += val_batch_loss.item() * curr_batch_size
 
-                    val_loss += val_batch_loss.item() * curr_batch_size
-                # image = image.to(device)
                 if i == 0:
                     sample = unwrapped_pipeline.sample(
                         image,
@@ -209,7 +207,7 @@ def main(cfg: InstructInversionBPTTConfig):
                     eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
                     eval_grid = plot_grid(concat_samples, eval_batch_save_path, nrow=8)
                     logs.update({"val/grid": wandb.Image(eval_grid)})
-            
+
             val_loss /= len(eval_dataset)
             logs.update({"val/loss": val_loss})
             accelerator.log(logs)
