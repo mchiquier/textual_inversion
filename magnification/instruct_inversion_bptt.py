@@ -39,16 +39,9 @@ def main(cfg: InstructInversionBPTTConfig):
     )
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.total_batch_size)
 
-    accelerator_config = ProjectConfiguration(
-        project_dir=cfg.log_dir / cfg.run_name,
-        automatic_checkpoint_naming=True,
-        total_limit=cfg.num_checkpoint_limit,
-    )
-
     accelerator = Accelerator(
         log_with="wandb",
-        mixed_precision=cfg.mixed_precision,
-        project_config=accelerator_config,
+        mixed_precision=cfg.mixed_precision
     )
     device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
     # device = accelerator.device

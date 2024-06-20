@@ -43,9 +43,9 @@ def main(cfg: InstructInversionBPTTConfig):
         eval_dataset = Subset(eval_dataset, subset_indices)
 
     data_loader = DataLoader(
-        dataset, batch_size=cfg.train.total_batch_size, shuffle=True
+        dataset, batch_size=cfg.train.batch_size, shuffle=True
     )
-    eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.total_batch_size)
+    eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.batch_size)
 
     accelerator_kwargs = [DistributedDataParallelKwargs(find_unused_parameters=True)]
     accelerator = Accelerator(
@@ -212,7 +212,7 @@ def main(cfg: InstructInversionBPTTConfig):
                     eval_grid = plot_grid(
                         concat_samples,
                         eval_batch_save_path,
-                        nrow=cfg.train.total_batch_size // 4,
+                        nrow=cfg.train.batch_size // 4,
                     )
                     logs.update({"val/grid": wandb.Image(eval_grid)})
 

@@ -654,15 +654,21 @@ class InstructInversionClf(InstructInversionBPTT):
 
         logits_per_image = self.clf(output_image)
         probs = logits_per_image.softmax(dim=1)
-        targets = torch.ones((batch_size,)).to(logits_per_image.device).long()
 
         # classification loss
         # 1. cross-entropy
-        cls_loss_fn = nn.CrossEntropyLoss()
-        cls_loss = cls_loss_fn(logits_per_image, targets)
+        targets = torch.ones((batch_size,)).to(logits_per_image.device).long()
+        xentropy_fn = nn.CrossEntropyLoss()
+        cls_loss = xentropy_fn(logits_per_image, targets)
 
-        # 2. KLDivergence
-
+        # 2. KLDivergence - probably similar to CE when target are one-hot
+        # targets = (
+        #     torch.tensor([0, 1], dtype=torch.float32)
+        #     .to(logits_per_image.device)
+        #     .repeat((batch_size,))
+        # )
+        # kl_loss = nn.KLDivLoss(reduction="batchmean")
+        # cls_loss = kl_loss(probs.log(), targets)
 
         # reconstruction mse
         # 1. pixel mse
