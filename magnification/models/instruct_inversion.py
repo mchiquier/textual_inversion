@@ -1,6 +1,7 @@
 import inspect
 import random
 import torch
+import lpips
 import torch.utils.checkpoint as checkpoint
 from torchvision import transforms
 from transformers import CLIPProcessor, CLIPModel
@@ -661,35 +662,21 @@ class InstructInversionClf(InstructInversionBPTT):
         xentropy_fn = nn.CrossEntropyLoss()
         cls_loss = xentropy_fn(logits_per_image, targets)
 
-        # 2. KLDivergence - probably similar to CE when target are one-hot
-        # targets = (
-        #     torch.tensor([0, 1], dtype=torch.float32)
-        #     .to(logits_per_image.device)
-        #     .repeat((batch_size,))
-        # )
-        # kl_loss = nn.KLDivLoss(reduction="batchmean")
-        # cls_loss = kl_loss(probs.log(), targets)
-
-        # reconstruction mse
-        # 1. pixel mse
-        # rec_pixel_loss = F.mse_loss(output_image, image)
-        # 2. latents mse
-        # if self.do_classifier_free_guidance:
-        #     image_latents, _, _ = image_latents.chunk(3)
-        # rec_latents_loss = F.mse_loss(latents, image_latents)
-
         # reconstruction l1
         # 1. pixel l1
         rec_pixel_loss = F.l1_loss(output_image, image)
         # 2. latents l1
         if self.do_classifier_free_guidance:
             image_latents, _, _ = image_latents.chunk(3)
-        rec_latents_loss = F.l1_loss(latents, image_latents)
+        scaled_image_latents = image_latents * self.vae.config.scaling_factor
+        rec_latents_loss = F.l1_loss(latents, scaled_image_latents)
 
         # lpips loss (perceptual)
+        lpips_fn = lpips.LPIPS(net='vgg').to(output_image.device)
+        lpips_loss = lpips_fn(output_image, image).mean()
 
         # loss
-        rec_loss = rec_pixel_loss + rec_latents_loss
+        rec_loss = rec_pixel_loss + rec_latents_loss + lpips_loss
         loss = cls_loss + rec_loss
 
         return loss, logits_per_image, probs
