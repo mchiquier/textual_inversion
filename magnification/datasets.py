@@ -88,8 +88,8 @@ class TextualInversionEdits(ImageEdits):
 
         images = images / 255.0
         image, image_edit = images.chunk(2)
-        # TODO: support multiple placeholder strings
-        prompt = self.placeholder_str[0]
+
+        prompt = convert_placeholders_to_prompt(self.placeholder_str)
         return image, image_edit, prompt
 
 
@@ -112,8 +112,7 @@ class TextualInversionEval(TextualInversionEdits):
             image = self.transform(image)
 
         image = image / 255.0
-        # TODO: support multiple placeholder strings
-        prompt = self.placeholder_str[0]
+        prompt = convert_placeholders_to_prompt(self.placeholder_str)
         return image, prompt
 
 
@@ -136,11 +135,18 @@ class TextualInversionAFHQ(AFHQ):
             image = self.transform(image)
 
         image = image / 255.0
-        # TODO: support multiple placeholder strings
-        prompt = self.placeholder_str[0]
+        prompt = convert_placeholders_to_prompt(self.placeholder_str)
         return image, prompt
 
 
 def convert_to_np(img_path: Path):
     image = Image.open(img_path).convert("RGB")
     return np.array(image).transpose(2, 0, 1)
+
+
+def convert_placeholders_to_prompt(placeholders_list: list[str]):
+    if len(placeholders_list) == 1:
+        prompt = placeholders_list[0]
+    else:
+        prompt = " ".join(placeholders_list)
+    return prompt

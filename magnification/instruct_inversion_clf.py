@@ -30,18 +30,20 @@ def main(cfg: InstructInversionBPTTConfig):
         * cfg.dataset.repeats
     )
 
-    # Option to take a subset of the training set (useful for debug)
-    if cfg.dataset.subset is not None:
-        subset_indices = list(range(cfg.dataset.subset))
-        dataset = Subset(dataset, subset_indices)
-
-    data_loader = DataLoader(
-        dataset, batch_size=cfg.train.total_batch_size, shuffle=True
-    )
     eval_dataset = TextualInversionEval(
         cfg.dataset.eval_dir,
         cfg.diffusion.embedding_config.placeholder_strings,
         transform=transforms.Resize(cfg.dataset.img_size),
+    )
+
+    # Option to take subsets of the datasets (useful for debug)
+    if cfg.dataset.subset is not None:
+        subset_indices = list(range(cfg.dataset.subset))
+        dataset = Subset(dataset, subset_indices)
+        eval_dataset = Subset(eval_dataset, subset_indices)
+
+    data_loader = DataLoader(
+        dataset, batch_size=cfg.train.total_batch_size, shuffle=True
     )
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.total_batch_size)
 
@@ -148,16 +150,18 @@ def main(cfg: InstructInversionBPTTConfig):
             save_dict = unwrapped_pipeline.embedding_manager.get_save_dict()
             accelerator.save(save_dict, epoch_output_dir / f"embedding_{epoch}.pt")
 
-            embed_mean = list(
+            embed_list = list(
                 unwrapped_pipeline.embedding_manager.embedding_parameters()
-            )[0].mean()
+            )
+            embed_mean_list = [x.mean().item() for x in embed_list]
+            embed_mean = sum(embed_mean_list) / len(embed_mean_list)
             grads = [
                 (name, param.grad.shape)
                 for name, param in unwrapped_pipeline.named_parameters()
                 if param.grad is not None
             ]
             accelerator.print(f"number of learned params: {len(grads)}")
-            accelerator.print(f"embed-mean: {embed_mean}")
+            accelerator.print(f"embed-mean-list: {embed_mean_list}")
 
             logs = {
                 "train/loss": train_loss,
@@ -205,7 +209,11 @@ def main(cfg: InstructInversionBPTTConfig):
                     )
                     concat_samples = torch.cat([image, sample])
                     eval_batch_save_path = epoch_output_dir / f"{loss.item()}_eval.jpg"
-                    eval_grid = plot_grid(concat_samples, eval_batch_save_path, nrow=8)
+                    eval_grid = plot_grid(
+                        concat_samples,
+                        eval_batch_save_path,
+                        nrow=cfg.train.total_batch_size // 4,
+                    )
                     logs.update({"val/grid": wandb.Image(eval_grid)})
 
             val_loss /= len(eval_dataset)

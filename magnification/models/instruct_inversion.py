@@ -656,18 +656,35 @@ class InstructInversionClf(InstructInversionBPTT):
         probs = logits_per_image.softmax(dim=1)
         targets = torch.ones((batch_size,)).to(logits_per_image.device).long()
 
-        loss_fn = nn.CrossEntropyLoss()
-        loss = loss_fn(logits_per_image, targets)
+        # classification loss
+        # 1. cross-entropy
+        cls_loss_fn = nn.CrossEntropyLoss()
+        cls_loss = cls_loss_fn(logits_per_image, targets)
 
-        # pixel mse
-        # reg_loss = F.mse_loss(output_image, image)
+        # 2. KLDivergence
 
-        # latents mse
+
+        # reconstruction mse
+        # 1. pixel mse
+        # rec_pixel_loss = F.mse_loss(output_image, image)
+        # 2. latents mse
+        # if self.do_classifier_free_guidance:
+        #     image_latents, _, _ = image_latents.chunk(3)
+        # rec_latents_loss = F.mse_loss(latents, image_latents)
+
+        # reconstruction l1
+        # 1. pixel l1
+        rec_pixel_loss = F.l1_loss(output_image, image)
+        # 2. latents l1
         if self.do_classifier_free_guidance:
             image_latents, _, _ = image_latents.chunk(3)
-        reg_loss = F.mse_loss(latents, image_latents)
+        rec_latents_loss = F.l1_loss(latents, image_latents)
 
-        loss = loss + reg_loss
+        # lpips loss (perceptual)
+
+        # loss
+        rec_loss = rec_pixel_loss + rec_latents_loss
+        loss = cls_loss + rec_loss
 
         return loss, logits_per_image, probs
 

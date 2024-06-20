@@ -72,6 +72,9 @@ class EmbeddingManager(nn.Module):
             token = get_token_for_string(placeholder_string)
 
             if initializer_words and idx < len(initializer_words):
+                # assign init word embedding for each placeholder string
+                # to have a different init word for each placeholder,
+                # init_words and placeholder_strings should have the same length
                 init_word_token = get_token_for_string(initializer_words[idx])
 
                 with torch.no_grad():
@@ -90,6 +93,13 @@ class EmbeddingManager(nn.Module):
             tokenized_text,
             embedded_text,
     ):
+        """
+        Args:
+            tokenized_text ([torch.Tensor]):
+                token indices for each prompt in batch. Shape: [bsz, max-length], e.g [32, 77]
+            embedded_text ([torch.Tensor]):
+                text embeddings for each prompt in batch. Shape: [bsz, max-length, token-dim], e.g [32, 77, 768] for CLIP encoder
+        """
         b, n, device = *tokenized_text.shape, tokenized_text.device
 
         for placeholder_string, placeholder_token in self.string_to_token_dict.items():
@@ -120,6 +130,7 @@ class EmbeddingManager(nn.Module):
                     row = sorted_rows[idx]
                     col = sorted_cols[idx]
 
+                    # repeats placeholder_token for num_vectors_for_token
                     new_token_row = torch.cat([tokenized_text[row][:col], placeholder_token.repeat(num_vectors_for_token).to(device), tokenized_text[row][col + 1:]], axis=0)[:n]
                     new_embed_row = torch.cat([embedded_text[row][:col], placeholder_embedding[:num_vectors_for_token], embedded_text[row][col + 1:]], axis=0)[:n]
 
