@@ -102,10 +102,11 @@ class EvalConfig:
     dataset: DatasetConfig
     ckpt_path: Path
     output_dir: Path
-    run_name: str
     batch_size: int
     num_inference_steps: int
     device: int
+    guidance_scale: Optional[float] = 7.5
+    image_guidance_scale: Optional[float] = 1.5
 
     def __post_init__(self):
         self.output_dir.mkdir(exist_ok=True, parents=True)
