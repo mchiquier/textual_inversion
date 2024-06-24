@@ -1,8 +1,10 @@
 import torch
+import random
 from pathlib import Path
 from PIL import Image
 from torch.utils.data import Dataset
 import numpy as np
+from magnification.utils.templates import INSTRUCT_PREFIX_TEMPLATES
 
 
 class AFHQ(Dataset):
@@ -14,7 +16,7 @@ class AFHQ(Dataset):
         self.dog_dir = self.split_dir / "dog"
 
         self.cat_images = list(self.cat_dir.rglob("*.jpg"))
-        self.dog_images = list(self.cat_dir.rglob("*.jpg"))
+        self.dog_images = list(self.dog_dir.rglob("*.jpg"))
 
         self.image_list = self.cat_images + self.dog_images
         self.labels = [0] * len(self.cat_images) + [1] * len(self.dog_images)
@@ -123,6 +125,26 @@ class TextualInversionAFHQ(AFHQ):
         super().__init__(root_dir, split, transform)
         self.placeholder_str = placeholder_str
 
+    def __getitem__(self, idx):
+        img_path = self.image_list[idx]
+        image = convert_to_np(img_path)
+        image = torch.tensor(image)
+
+        if self.transform:
+            image = self.transform(image)
+
+        image = image / 255.0
+        prompt = convert_placeholders_to_prompt(self.placeholder_str)
+        return image, prompt
+
+
+class TextualInversionCats(AFHQ):
+    def __init__(
+        self, root_dir: Path, split: str, placeholder_str: list[str], transform=None
+    ):
+        super().__init__(root_dir, split, transform)
+        self.placeholder_str = placeholder_str
+
     def __len__(self):
         return len(self.cat_images)
 
@@ -139,14 +161,53 @@ class TextualInversionAFHQ(AFHQ):
         return image, prompt
 
 
+class TextualInversionPairsAFHQ(AFHQ):
+    def __init__(
+        self, root_dir: Path, split: str, placeholder_str: list[str], transform=None
+    ):
+        super().__init__(root_dir, split, transform)
+        self.placeholder_str = placeholder_str
+
+    def __len__(self):
+        return min(len(self.cat_images), len(self.dog_images))
+
+    def __getitem__(self, idx):
+        img_path = self.cat_images[idx]
+        edited_img_path = self.dog_images[idx]
+
+        image = convert_to_np(img_path)
+        edited_image = convert_to_np(edited_img_path)
+
+        image = torch.tensor(image)
+        edited_image = torch.tensor(edited_image)
+
+        if self.transform:
+            image = self.transform(image)
+            edited_image = self.transform(edited_image)
+
+        image = image / 255.0
+        edited_image = edited_image / 255.0
+        prompt = convert_placeholders_to_prompt(self.placeholder_str)
+        return image, edited_image, prompt
+
+
 def convert_to_np(img_path: Path):
     image = Image.open(img_path).convert("RGB")
     return np.array(image).transpose(2, 0, 1)
 
 
-def convert_placeholders_to_prompt(placeholders_list: list[str]):
-    if len(placeholders_list) == 1:
-        prompt = placeholders_list[0]
-    else:
-        prompt = " ".join(placeholders_list)
+def convert_placeholders_to_prompt(placeholders_list: list[str], with_prefix: bool = False):
+    if with_prefix is False:
+        if len(placeholders_list) == 1:
+            prompt = placeholders_list[0]
+        else:
+            prompt = " ".join(placeholders_list[1:-1])
     return prompt
+    # else:
+    #     prefix = random.choice(INSTRUCT_PREFIX_TEMPLATES)
+    #     if len(placeholders_list) == 1:
+    #         prompt = f"{prefix} a {placeholders_list[0]}"
+    #     else:
+    #         prompt = " ".join(placeholders_list[1:-1])
+
+    # return prompt

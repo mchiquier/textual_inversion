@@ -9,7 +9,10 @@ from torch.utils.data import DataLoader, ConcatDataset, Subset
 from magnification.utils.viz import plot_grid, plot_logits_and_predictions
 from magnification.datasets import TextualInversionAFHQ, TextualInversionEval
 from magnification.textual_inversion_config import InstructInversionBPTTConfig
-from magnification.models.instruct_inversion import InstructInversionClf
+from magnification.models.instruct_inversion import (
+    InstructInversionClf,
+    InstructInversionClfConstrastive,
+)
 
 
 @pyrallis.wrap()
@@ -30,10 +33,17 @@ def main(cfg: InstructInversionBPTTConfig):
         * cfg.dataset.repeats
     )
 
-    eval_dataset = TextualInversionEval(
-        cfg.dataset.eval_dir,
-        cfg.diffusion.embedding_config.placeholder_strings,
+    # eval_dataset = TextualInversionEval(
+    #     cfg.dataset.eval_dir,
+    #     cfg.diffusion.embedding_config.placeholder_strings,
+    #     transform=transforms.Resize(cfg.dataset.img_size),
+    # )
+
+    eval_dataset = TextualInversionAFHQ(
+        root_dir=cfg.dataset.image_dir,
+        placeholder_str=cfg.diffusion.embedding_config.placeholder_strings,
         transform=transforms.Resize(cfg.dataset.img_size),
+        split="val",
     )
 
     # Option to take subsets of the datasets (useful for debug)
@@ -42,9 +52,7 @@ def main(cfg: InstructInversionBPTTConfig):
         dataset = Subset(dataset, subset_indices)
         eval_dataset = Subset(eval_dataset, subset_indices)
 
-    data_loader = DataLoader(
-        dataset, batch_size=cfg.train.batch_size, shuffle=True
-    )
+    data_loader = DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True)
     eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.batch_size)
 
     accelerator_kwargs = [DistributedDataParallelKwargs(find_unused_parameters=True)]
@@ -119,12 +127,12 @@ def main(cfg: InstructInversionBPTTConfig):
         for i, batch in enumerate(data_loader):
             optimizer.zero_grad()
 
-            image, prompt = batch
+            image, edited_image, prompt = batch
             curr_batch_size = image.shape[0]
 
             loss, _, _ = pipeline(
                 image=image,
-                edited_image=None,
+                edited_image=edited_image,
                 prompt=prompt,
                 num_inference_steps=cfg.num_inference_steps,
                 guidance_scale=cfg.guidance_scale,
@@ -134,7 +142,6 @@ def main(cfg: InstructInversionBPTTConfig):
                 truncated_backprop_minmax=cfg.train.truncated_backprop_minmax,
             )
             accelerator.print(f"batch {i} - loss: {loss.item()}")
-            # loss.backward()
             accelerator.backward(loss)
             optimizer.step()
 
@@ -186,7 +193,14 @@ def main(cfg: InstructInversionBPTTConfig):
             accelerator.print("evaluation")
             val_loss = 0.0
             for i, batch in enumerate(eval_data_loader):
-                image, prompt = batch
+                image, edited_image, prompt = batch
+                curr_batch_size = image.shape[0]
+
+                half_size = int(curr_batch_size // 2)
+                half_batch1 = image[:half_size]
+                half_batch2 = edited_image[:half_size]
+                image = torch.cat((half_batch1, half_batch2), dim=0)
+
                 curr_batch_size = image.shape[0]
                 with torch.no_grad():
                     val_batch_loss, _, _ = unwrapped_pipeline(
