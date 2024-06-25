@@ -41,7 +41,10 @@ class ImageEdits(Dataset):
         self.edits_dir = edits_dir
         self.transform = transform
 
-        self.image_list = list(self.images_dir.rglob("*"))
+        image_files = []
+        for ext in ('*.jpg', '*.png'):
+            image_files.extend(self.images_dir.rglob(ext))
+        self.image_list = image_files
 
     def __len__(self):
         return len(self.image_list)
@@ -201,7 +204,7 @@ def convert_placeholders_to_prompt(placeholders_list: list[str], with_prefix: bo
         if len(placeholders_list) == 1:
             prompt = placeholders_list[0]
         else:
-            prompt = " ".join(placeholders_list[1:-1])
+            prompt = " ".join(placeholders_list)
     return prompt
     # else:
     #     prefix = random.choice(INSTRUCT_PREFIX_TEMPLATES)

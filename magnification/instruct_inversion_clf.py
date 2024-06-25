@@ -7,61 +7,20 @@ from accelerate.utils import set_seed
 from torchvision import transforms
 from torch.utils.data import DataLoader, ConcatDataset, Subset
 from magnification.utils.viz import plot_grid, plot_logits_and_predictions
-from magnification.datasets import TextualInversionAFHQ, TextualInversionEval
+from magnification.datasets import TextualInversionAFHQ, TextualInversionEval, TextualInversionCats
 from magnification.textual_inversion_config import InstructInversionBPTTConfig
-from magnification.models.instruct_inversion import (
-    InstructInversionClf,
-    InstructInversionClfConstrastive,
-)
+from magnification.models.instruct_inversion import InstructInversionClf
 
 
 @pyrallis.wrap()
 def main(cfg: InstructInversionBPTTConfig):
-
-    transform = transforms.Compose(
-        [transforms.Resize(cfg.dataset.img_size), transforms.RandomHorizontalFlip()]
-    )
-    dataset = ConcatDataset(
-        [
-            TextualInversionAFHQ(
-                root_dir=cfg.dataset.image_dir,
-                placeholder_str=cfg.diffusion.embedding_config.placeholder_strings,
-                transform=transform,
-                split="train",
-            )
-        ]
-        * cfg.dataset.repeats
-    )
-
-    # eval_dataset = TextualInversionEval(
-    #     cfg.dataset.eval_dir,
-    #     cfg.diffusion.embedding_config.placeholder_strings,
-    #     transform=transforms.Resize(cfg.dataset.img_size),
-    # )
-
-    eval_dataset = TextualInversionAFHQ(
-        root_dir=cfg.dataset.image_dir,
-        placeholder_str=cfg.diffusion.embedding_config.placeholder_strings,
-        transform=transforms.Resize(cfg.dataset.img_size),
-        split="val",
-    )
-
-    # Option to take subsets of the datasets (useful for debug)
-    if cfg.dataset.subset is not None:
-        subset_indices = list(range(cfg.dataset.subset))
-        dataset = Subset(dataset, subset_indices)
-        eval_dataset = Subset(eval_dataset, subset_indices)
-
-    data_loader = DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True)
-    eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.batch_size)
-
+    
     accelerator_kwargs = [DistributedDataParallelKwargs(find_unused_parameters=True)]
     accelerator = Accelerator(
         log_with="wandb",
         mixed_precision=cfg.mixed_precision,
         kwargs_handlers=accelerator_kwargs,
     )
-    # device = torch.device(f"cuda:{cfg.device}" if torch.cuda.is_available() else "cpu")
     device = accelerator.device
 
     if accelerator.is_main_process:
@@ -81,14 +40,12 @@ def main(cfg: InstructInversionBPTTConfig):
             cfg.log_dir / wandb.run.name
         )
 
+    set_seed(42, device_specific=True)
+
     # Enable TF32 for faster training on Ampere GPUs,
     # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
     if cfg.allow_tf32:
         torch.backends.cuda.matmul.allow_tf32 = True
-
-    set_seed(42, device_specific=True)
-
-    pipeline = InstructInversionClf(**asdict(cfg.diffusion))
 
     # For mixed precision training we cast all non-trainable weigths (vae, non-lora text_encoder and non-lora unet) to half-precision
     # as these weights are only used for inference, keeping weights in full precision is not required.
@@ -97,6 +54,47 @@ def main(cfg: InstructInversionBPTTConfig):
         inference_dtype = torch.float16
     elif accelerator.mixed_precision == "bf16":
         inference_dtype = torch.bfloat16
+
+    transform = transforms.Compose(
+        [transforms.Resize(cfg.dataset.img_size), transforms.RandomHorizontalFlip()]
+    )
+    dataset = ConcatDataset(
+        [
+            TextualInversionCats(
+                root_dir=cfg.dataset.image_dir,
+                placeholder_str=cfg.diffusion.embedding_config.placeholder_strings,
+                transform=transform,
+                split="train",
+            )
+        ]
+        * cfg.dataset.repeats
+    )
+
+    # eval_dataset = TextualInversionEval(
+    #     cfg.dataset.eval_dir,
+    #     cfg.diffusion.embedding_config.placeholder_strings,
+    #     transform=transforms.Resize(cfg.dataset.img_size),
+    # )
+
+    eval_dataset = TextualInversionCats(
+        root_dir=cfg.dataset.image_dir,
+        placeholder_str=cfg.diffusion.embedding_config.placeholder_strings,
+        transform=transforms.Resize(cfg.dataset.img_size),
+        split="val",
+    )
+    shuffle_indices = torch.randperm(len(eval_dataset)).tolist()
+    eval_dataset = Subset(eval_dataset, shuffle_indices)
+
+    # Option to take subsets of the datasets (useful for debug)
+    if cfg.dataset.subset is not None:
+        subset_indices = list(range(cfg.dataset.subset))
+        dataset = Subset(dataset, subset_indices)
+        eval_dataset = Subset(eval_dataset, subset_indices)
+
+    data_loader = DataLoader(dataset, batch_size=cfg.train.batch_size, shuffle=True)
+    eval_data_loader = DataLoader(eval_dataset, batch_size=cfg.train.batch_size)
+
+    pipeline = InstructInversionClf(**asdict(cfg.diffusion))
 
     # Move unet, vae and text_encoder to device and cast to inference_dtype
     pipeline.to(device, dtype=inference_dtype)
@@ -127,12 +125,12 @@ def main(cfg: InstructInversionBPTTConfig):
         for i, batch in enumerate(data_loader):
             optimizer.zero_grad()
 
-            image, edited_image, prompt = batch
+            image, prompt = batch
             curr_batch_size = image.shape[0]
 
             loss, _, _ = pipeline(
                 image=image,
-                edited_image=edited_image,
+                edited_image=None,
                 prompt=prompt,
                 num_inference_steps=cfg.num_inference_steps,
                 guidance_scale=cfg.guidance_scale,
@@ -176,30 +174,11 @@ def main(cfg: InstructInversionBPTTConfig):
                 "train/number-learned-params": len(grads),
             }
 
-            # visualize samples
-            # sample = pipeline.sample(
-            #     image, prompt, output_type="pt", num_inference_steps=cfg.num_inference_steps
-            # )
-            # train_batch_save_path = epoch_output_dir / f"{loss.item()}_train.jpg"
-            # train_grid = plot_grid(sample, train_batch_save_path)
-            # logs.update({"train/grid": wandb.Image(train_grid)})
-
-            # plot logits and pred
-            # logits_plot_path = epoch_output_dir / f"{loss.item()}_logits.jpg"
-            # fig = plot_logits_and_predictions(logits, probs, logits_plot_path)
-            # logs.update({"logits": fig})
-
             # eval loop
             accelerator.print("evaluation")
             val_loss = 0.0
             for i, batch in enumerate(eval_data_loader):
-                image, edited_image, prompt = batch
-                curr_batch_size = image.shape[0]
-
-                half_size = int(curr_batch_size // 2)
-                half_batch1 = image[:half_size]
-                half_batch2 = edited_image[:half_size]
-                image = torch.cat((half_batch1, half_batch2), dim=0)
+                image, prompt = batch
 
                 curr_batch_size = image.shape[0]
                 with torch.no_grad():

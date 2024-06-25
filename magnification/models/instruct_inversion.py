@@ -555,13 +555,14 @@ class InstructInversionClf(InstructInversionBPTT):
         grad_checkpoint: bool = True,
         truncated_backprop: bool = False,
         truncated_backprop_minmax: Union[tuple, list] = (35, 45),
+        use_clip_templates: bool = False,
         generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
     ):
         self._guidance_scale = guidance_scale
         self._image_guidance_scale = image_guidance_scale
-        choose_sample = random.uniform(0, 1)
-        if choose_sample < 0.5 and edited_image is not None:
-            image = edited_image
+        # choose_sample = random.uniform(0, 1)
+        # if choose_sample < 0.5 and edited_image is not None:
+        #     image = edited_image
 
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
@@ -569,6 +570,15 @@ class InstructInversionClf(InstructInversionBPTT):
             isinstance(prompt, list) or isinstance(prompt, tuple)
         ):
             batch_size = len(prompt)
+
+        # TODO: get initial classifier logits
+        init_logits_per_image = self.clf(image, use_clip_templates)
+        targets = init_logits_per_image.softmax(dim=1)
+
+        # TODO: random combinations
+        # token_list = select_random_combination(prompt[0].split(" "))
+        # combination = " ".join(token_list)
+        # prompt = tuple([combination for _ in range(len(prompt))])
 
         # Encode input prompt
         prompt_embeds = self.text_encoder.encode(
@@ -673,187 +683,22 @@ class InstructInversionClf(InstructInversionBPTT):
             output_image, output_type="pt"
         )
 
-        logits_per_image = self.clf(output_image)
+        logits_per_image = self.clf(output_image, use_clip_templates)
         probs = logits_per_image.softmax(dim=1)
 
         # classification loss
         # 1. cross-entropy
-        targets = torch.ones((batch_size,)).to(logits_per_image.device).long()
-        if choose_sample < 0.5 and edited_image is not None:
-            targets = torch.zeros((batch_size,)).to(logits_per_image.device).long()
+        # targets = torch.ones((batch_size,)).to(logits_per_image.device).long()
+
+        # if choose_sample < 0.5 and edited_image is not None:
+        #     targets = torch.zeros((batch_size,)).to(logits_per_image.device).long()
+
         # xentropy_fn = nn.CrossEntropyLoss()
-        xentropy_fn = LabelSmoothingCrossEntropy(smoothing=0.05)
-        cls_loss = xentropy_fn(logits_per_image, targets)
-
-        # reconstruction l1
-        # 1. pixel l1
-        # rec_pixel_loss = F.l1_loss(output_image, image)
-        # 2. latents l1
-        if self.do_classifier_free_guidance:
-            image_latents, _, _ = image_latents.chunk(3)
-        scaled_image_latents = image_latents * self.vae.config.scaling_factor
-        rec_latents_loss = F.l1_loss(latents, scaled_image_latents)
-
-        # loss
-        rec_loss = rec_latents_loss
-        loss = cls_loss + rec_loss
-
-        return loss, logits_per_image, probs
-
-
-class InstructInversionClfConstrastive(InstructInversionClf):
-    def __init__(
-        self, embedding_config: EmbeddingManagerConfig, conditioning_dropout_prob: float
-    ) -> None:
-        super().__init__(embedding_config, conditioning_dropout_prob)
-
-    def forward(
-        self,
-        image: torch.Tensor,
-        edited_image: torch.Tensor,
-        prompt: Union[str, list[str]],
-        num_inference_steps: int = 100,
-        guidance_scale: float = 7.5,
-        image_guidance_scale: float = 1.5,
-        eta: float = 0.0,
-        grad_checkpoint: bool = True,
-        truncated_backprop: bool = False,
-        truncated_backprop_minmax: Union[tuple, list] = (35, 45),
-        generator: Optional[Union[torch.Generator, list[torch.Generator]]] = None,
-    ):
-        self._guidance_scale = guidance_scale
-        self._image_guidance_scale = image_guidance_scale
-
-        if prompt is not None and isinstance(prompt, str):
-            batch_size = 1
-        elif prompt is not None and (
-            isinstance(prompt, list) or isinstance(prompt, tuple)
-        ):
-            batch_size = len(prompt)
-
-        # Encode input prompt
-        # randomly choose a token or full prompt (all tokens)
-        choose_single_token = 1.0
-        choice = random.random()
-        if choice <= choose_single_token:
-            idx = random.randint(0, 4)
-            prompt = tuple([x[2 * idx] for x in prompt])
-
-        prompt_embeds = self.text_encoder.encode(
-            prompt, embedding_manager=self.embedding_manager
-        )
-        if self.do_classifier_free_guidance:
-            uncond_tokens = [""] * batch_size
-            uncond_embeds = self.text_encoder.encode(
-                uncond_tokens, embedding_manager=self.embedding_manager
-            )
-            prompt_embeds = torch.cat([prompt_embeds, uncond_embeds, uncond_embeds])
-
-        # Get the additional image embedding for conditioning.
-        # Instead of getting a diagonal Gaussian here, we simply take the mode.
-        image = self.pipe.image_processor.preprocess(image)
-        image_latents = self.prepare_image_latents(image)
-
-        height, width = image_latents.shape[-2:]
-        height = height * self.vae.config.scaling_factor
-        width = width * self.vae.config.scaling_factor
-
-        # Prepare latent variables
-        num_channels_latents = self.vae.config.latent_channels
-
-        latents = self.prepare_latents(
-            batch_size,
-            num_channels_latents,
-            height,
-            width,
-            prompt_embeds.dtype,
-            image_latents.device,
-            generator,
-        )
-
-        # Prepare extra step kwargs.
-        extra_step_kwargs = self.prepare_extra_step_kwargs(generator, eta)
-
-        # Set timesteps
-        self.noise_scheduler.set_timesteps(num_inference_steps)
-        timesteps = self.noise_scheduler.timesteps
-        self._num_timesteps = len(timesteps)
-
-        for i, t in tqdm(enumerate(timesteps), total=len(timesteps)):
-            t = torch.tensor([t], device=latents.device)
-
-            # Expand the latents if we are doing classifier free guidance.
-            # The latents are expanded 3 times because for pix2pix the guidance\
-            # is applied for both the text and the input image.
-            latent_model_input = (
-                torch.cat([latents] * 3)
-                if self.do_classifier_free_guidance
-                else latents
-            )
-
-            # concat latents, image_latents in the channel dimension
-            scaled_latent_model_input = self.noise_scheduler.scale_model_input(
-                latent_model_input, t
-            )
-            scaled_latent_model_input = torch.cat(
-                [scaled_latent_model_input, image_latents], dim=1
-            )
-
-            if grad_checkpoint:
-                noise_pred = checkpoint.checkpoint(
-                    self.unet,
-                    scaled_latent_model_input,
-                    t,
-                    prompt_embeds,
-                    use_reentrant=False,
-                ).sample
-            else:
-                noise_pred = self.unet(
-                    scaled_latent_model_input, t, prompt_embeds
-                ).sample
-
-            if truncated_backprop:
-                timestep = random.randint(
-                    truncated_backprop_minmax[0],
-                    truncated_backprop_minmax[1],
-                )
-                if i < timestep:
-                    noise_pred = noise_pred.detach()
-
-            # perform guidance
-            if self.do_classifier_free_guidance:
-                noise_pred_text, noise_pred_image, noise_pred_uncond = noise_pred.chunk(
-                    3
-                )
-                noise_pred = (
-                    noise_pred_uncond
-                    + self.guidance_scale * (noise_pred_text - noise_pred_image)
-                    + self.image_guidance_scale * (noise_pred_image - noise_pred_uncond)
-                )
-
-            latents = self.noise_scheduler.step(
-                noise_pred, t[0].long(), latents, **extra_step_kwargs
-            ).prev_sample
-
-        output_image = self.vae.decode(
-            latents / self.vae.config.scaling_factor, return_dict=False
-        )[0]
-        output_image = self.pipe.image_processor.postprocess(
-            output_image, output_type="pt"
-        )
-
-        logits_per_image = self.clf(output_image)
-        probs = logits_per_image.softmax(dim=1)
-
-        # classification loss
-        # 1. cross-entropy
-        targets = torch.ones((batch_size,)).to(logits_per_image.device).long()
-        # xentropy_fn = nn.CrossEntropyLoss()
-        smoothing = 0.05
-        # if choice <= choose_single_token:
-        #     smoothing = random.uniform(0.2, 0.3)
-        xentropy_fn = LabelSmoothingCrossEntropy(smoothing=smoothing)
-        cls_loss = xentropy_fn(logits_per_image, targets)
+        # xentropy_fn = LabelSmoothingCrossEntropy(smoothing=0.05)
+        kl_div_loss = nn.KLDivLoss(reduction='batchmean')
+        # cls_loss = xentropy_fn(logits_per_image, targets)
+        log_probs = F.log_softmax(logits_per_image, dim=1)
+        cls_loss = kl_div_loss(log_probs, targets)
 
         # reconstruction l1
         # 1. pixel l1
@@ -881,6 +726,7 @@ class DiffCLIPModel(nn.Module):
     def forward(
         self,
         image: torch.Tensor,
+        use_clip_templates: bool,
         texts: Optional[list] = ["cat", "dog"],
     ):
         transform = transforms.Resize(
@@ -889,9 +735,14 @@ class DiffCLIPModel(nn.Module):
         resized_image = transform(image)
         inputs = {"pixel_values": resized_image}
 
-        num_templates = len(IMAGENET_CLIP_TEMPLATES)
-        idx = random.randint(0, num_templates-1)
-        template = IMAGENET_CLIP_TEMPLATES[idx]
+        if use_clip_templates:
+            templates = IMAGENET_CLIP_TEMPLATES
+        else:
+            templates = [IMAGENET_CLIP_TEMPLATES[0]]
+
+        num_templates = len(templates)
+        idx = random.randint(0, num_templates - 1)
+        template = templates[idx]
         texts = [template.replace("{}", x) for x in texts]
 
         text_inputs = self.processor(text=texts, return_tensors="pt", padding=True).to(
